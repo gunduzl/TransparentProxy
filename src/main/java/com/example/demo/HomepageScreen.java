@@ -18,8 +18,8 @@ public class HomepageScreen {
 
     private final Scene scene;
     private final Stage primaryStage;
-    private final ProxyManager proxyManager;
-    private final FilteredListManager filteredListManager;
+    private ProxyManager proxyManager;
+    private FilteredListManager filteredListManager;
 
     public HomepageScreen(Stage primaryStage, ProxyManager proxyManager,FilteredListManager filteredListManager ) {
         this.primaryStage = primaryStage;
@@ -49,31 +49,51 @@ public class HomepageScreen {
     public void show() {
         primaryStage.setScene(scene);
     }
+
     private void startProxy() {
-        // Display loading message
+        int port = 8080; // Default port number
+
         Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
         statusLabel.setText("Proxy Status: Starting...");
 
-        // Start the proxy in a new thread to avoid blocking the UI
         Thread thread = new Thread(() -> {
-            proxyManager.start();
+            try {
+                proxyManager.start(port);
+            } catch (Exception e) {
+                Platform.runLater(() -> {
+                    Alert alert = new Alert(Alert.AlertType.ERROR);
+                    alert.setTitle("Error Starting Proxy");
+                    alert.setHeaderText(null);
+                    alert.setContentText("An error occurred while starting the proxy: " + e.getMessage());
+                    alert.showAndWait();
+                });
+            }
+        });
+        thread.start();
+    }
 
-            // Update UI on the JavaFX application thread
+
+    private void stopProxy() {
+        proxyManager.stop();
+        Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
+        statusLabel.setText("Proxy Status: Stopping...");
+
+        Thread thread = new Thread(() -> {
+            while(proxyManager.isProxyRunning()) {
+                try {
+                    Thread.sleep(100); // Check every 100 milliseconds if the proxy has stopped
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
             Platform.runLater(() -> {
-                statusLabel.setText("Proxy Status: Running");
+                statusLabel.setText("Proxy Status: Stopped");
             });
         });
         thread.start();
     }
 
-    private void stopProxy() {
-        proxyManager.stop();
-        // Update UI on the JavaFX application thread
-        Platform.runLater(() -> {
-            Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
-            statusLabel.setText("Proxy Status: Stopped");
-        });
-    }
+
 
 
     private Menu createFileMenu() {
@@ -102,8 +122,11 @@ public class HomepageScreen {
     }
 
     private void displayReport() {
-        // Logic to display report
-        // This could involve showing a popup or navigating to a new scene
+        /*
+         Logic to display report
+         This could involve showing a popup or navigating to a new scene
+        */
+
     }
 
     private void addHostToFilter() {

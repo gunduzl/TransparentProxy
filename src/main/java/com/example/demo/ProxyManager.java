@@ -2,19 +2,30 @@ package com.example.demo;
 
 public class ProxyManager {
 
-    private boolean proxyRunning = false;
+    private Proxy proxy;
 
-    public void start() {
-        if (!proxyRunning) {
-            // Start proxy
-            proxyRunning = true;
+    public ProxyManager() {
+        this.proxy = new Proxy();
+    }
+
+    public void start(int port) {
+        if (!proxy.isRunning()) {
+            proxy.startProxy();
+        } else {
+            System.out.println("Proxy is already running.");
         }
     }
 
     public void stop() {
-        if (proxyRunning) {
-            // Stop proxy
-            proxyRunning = false;
+        if (proxy.isRunning()) {
+            proxy.stopProxy();
+            System.out.println("Proxy server stopped.");
+        } else {
+            System.out.println("Proxy server is not running.");
         }
+    }
+
+    public boolean isProxyRunning() {
+        return proxy.isRunning();
     }
 }

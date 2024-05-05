@@ -17,11 +17,13 @@ public class TransparentProxy extends Application {
         primaryStage.show();
     }
 
+
+
     private void showHomepage(Stage primaryStage) {
         HomepageScreen homepageScreen = new HomepageScreen(primaryStage, proxyManager, filteredListManager);
         primaryStage.setScene(homepageScreen.getScene());
+        
     }
-
     public static void main(String[] args) {
         launch(args);
     }

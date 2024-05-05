@@ -39,6 +39,20 @@ public class FilteredListManager {
         }
     }
 
+    public boolean isFilteredHost(String host) {
+        try {
+            PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) FROM filtered_hosts WHERE host = ?");
+            statement.setString(1, host);
+            ResultSet resultSet = statement.executeQuery();
+            resultSet.next();
+            return resultSet.getInt(1) > 0;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            // Handle exception appropriately
+            return false;
+        }
+    }
+
     public List<String> getFilteredHosts() {
         List<String> filteredHosts = new ArrayList<>();
         try {
