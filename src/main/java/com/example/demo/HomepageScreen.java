@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public class HomepageScreen {
@@ -23,11 +24,20 @@ public class HomepageScreen {
     private ServerSocket serverSocket;
     private volatile boolean isRunning = false;
     private Thread proxyThread;
+    private final TextArea logTextArea;
+    private Map<String, CachedResources> cache;
 
-    public HomepageScreen(Stage primaryStage, ProxyManager proxyManager, FilteredListManager filteredListManager) {
+
+
+    public HomepageScreen(Stage primaryStage, ProxyManager proxyManager, FilteredListManager filteredListManager, Map<String, CachedResources> cache) {
         this.primaryStage = primaryStage;
         this.proxyManager = proxyManager;
         this.filteredListManager = filteredListManager;
+        this.cache = cache;
+        logTextArea = new TextArea();
+        logTextArea.setEditable(false);
+        logTextArea.setWrapText(true);
+
 
         Label statusLabel = new Label("Proxy Status: Stopped");
         Button startButton = new Button("Start Proxy");
@@ -35,7 +45,7 @@ public class HomepageScreen {
 
         VBox homepageLayout = new VBox(10);
         homepageLayout.setAlignment(Pos.CENTER);
-        homepageLayout.getChildren().addAll(statusLabel, startButton, stopButton);
+        homepageLayout.getChildren().addAll(statusLabel, startButton, stopButton,logTextArea);
 
         BorderPane mainLayout = new BorderPane();
         Menu fileMenu = createFileMenu();
@@ -66,7 +76,7 @@ public class HomepageScreen {
                     while (isRunning && !Thread.currentThread().isInterrupted()) {
                         try {
                             Socket incoming = serverSocket.accept();
-                            new ServerHandler(incoming,filteredListManager).start();
+                            new ServerHandler(incoming,filteredListManager,logTextArea, cache).start();
                         } catch (IOException e) {
                             if (isRunning) { // Only log unexpected errors.
                                 logError("Error accepting connection: " + e.getMessage());
@@ -75,10 +85,12 @@ public class HomepageScreen {
                     }
                 } finally {
                     updateStatus("Proxy Status: Stopped");
+                    appendToLog("Proxy server stopped");
                 }
             });
             proxyThread.start();
             updateStatus("Proxy Status: Running on port " + port);
+            appendToLog("Proxy server started on port " + port);
         } catch (IOException e) {
             logError("Error starting proxy server: " + e.getMessage());
             updateStatus("Proxy Status: Failed to start");
@@ -193,6 +205,9 @@ public class HomepageScreen {
          Logic to display report
          This could involve showing a popup or navigating to a new scene
         */
+    }
+    private void appendToLog(String message) {
+        Platform.runLater(() -> logTextArea.appendText(message + "\n"));
     }
 
     public Scene getScene() {

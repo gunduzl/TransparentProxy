@@ -12,6 +12,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Consumer;
 
 public class LoginScreen {
@@ -66,7 +68,9 @@ public class LoginScreen {
             ResultSet resultSet = statement.executeQuery();
             if (resultSet.next()) {
                 // Successful login
-                new HomepageScreen(primaryStage, new ProxyManager(), new FilteredListManager()).show(); // Show the HomepageScreen
+                Map<String, CachedResources> cache = new HashMap<>(); // Create or get your cache here
+                HomepageScreen homepageScreen = new HomepageScreen(primaryStage, new ProxyManager(), new FilteredListManager(), cache);
+                homepageScreen.show(); // Show the HomepageScreen
             } else {
                 // Invalid credentials
                 Alert alert = new Alert(Alert.AlertType.ERROR);

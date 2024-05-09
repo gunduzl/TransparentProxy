@@ -1,33 +1,40 @@
 package com.example.demo;
 
+import javafx.application.Platform;
+import javafx.scene.control.TextArea;
+
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class ServerHandler extends Thread {
     private final Socket conSock;
     private final FilteredListManager filteredListManager;
-    private DataInputStream dIS;
-    private DataOutputStream dOS;
-    private static final int BUFFER_SIZE = 8192; // Buffer size for reading response
-
+    private DataInputStream ServerStream;
+    private DataOutputStream ClientStream;
+    private static final int BUFFER_SIZE = 8192; //
+    private static final int MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
+    private static final int MAX_CACHE_SIZE = 100; // Maximum number of cached resources
+    private final TextArea logTextArea;
+    private Map<String, CachedResources> cache;
 
     // Caching mechanism
     private static final String CACHE_DIR = "./cache";
     private Map<String, File> cacheMap = new HashMap<>();
 
-    public ServerHandler(Socket c, FilteredListManager filteredListManager) {
+    public ServerHandler(Socket c, FilteredListManager filteredListManager, TextArea logTextArea, Map<String, CachedResources> cache) {
         conSock = c;
         this.filteredListManager = filteredListManager;
+        this.logTextArea = logTextArea;
+        this.cache = cache;
+        System.setProperty("java.net.preferIPv4Stack", "true");
         try {
-            dIS = new DataInputStream(conSock.getInputStream());
-            dOS = new DataOutputStream(conSock.getOutputStream());
-            ensureCacheDirExists(); // Ensure the cache directory exists
+            ServerStream = new DataInputStream(conSock.getInputStream());
+            ClientStream = new DataOutputStream(conSock.getOutputStream());
             System.out.println("ServerHandler initialized for: " + conSock);
+            appendToLog("ServerHandler initialized for: " + conSock);
         } catch (IOException e) {
             System.err.println("Error initializing ServerHandler: " + e.getMessage());
             try {
@@ -38,24 +45,14 @@ public class ServerHandler extends Thread {
         }
     }
 
-    private void ensureCacheDirExists() {
-        File cacheDir = new File(CACHE_DIR);
-        if (!cacheDir.exists()) {
-            boolean wasCreated = cacheDir.mkdirs();
-            if (wasCreated) {
-                System.out.println("Cache directory was created successfully.");
-            } else {
-                System.out.println("Failed to create cache directory.");
-            }
-        }
-    }
-
     @Override
     public void run() {
         try {
-            System.out.println("Handling connection from " + conSock.getInetAddress());
-            String header = readHeader(dIS);
+            System.out.println("Handling connection from " + conSock.getInetAddress().getHostAddress());
+            appendToLog("Handling connection from " + conSock.getInetAddress().getHostAddress());
+            String header = readHeader(ServerStream);
             System.out.println("Received header: " + header);
+            appendToLog("Received header: " + header);
 
             String method = extractMethod(header);
             String path = extractPath(header);
@@ -78,6 +75,7 @@ public class ServerHandler extends Thread {
             }
 
             System.out.println("Request method: " + method + ", Domain: " + domain + ", Path: " + urlPath);
+            appendToLog("Request method: " + method + ", Domain: " + domain + ", Path: " + urlPath);
 
             switch (method.toUpperCase()) {
                 case "GET":
@@ -98,10 +96,6 @@ public class ServerHandler extends Thread {
         }
     }
 
-
-
-
-
     private void sendToClient(URL url, byte[] cachedData) throws IOException {
         try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
              InputStream serverInput = cachedData == null ? socket.getInputStream() : new ByteArrayInputStream(cachedData);
@@ -118,25 +112,20 @@ public class ServerHandler extends Thread {
             byte[] buffer = new byte[4096];
             int bytesRead;
             while ((bytesRead = serverInput.read(buffer)) != -1) {
-                dOS.write(buffer, 0, bytesRead);
+                ClientStream.write(buffer, 0, bytesRead);
             }
-            dOS.flush();
+            ClientStream.flush();
         } finally {
             conSock.close();
         }
     }
-
 
     private String extractMethod(String header) {
         int firstSpace = header.indexOf(' ');
         return header.substring(0, firstSpace);
     }
 
-    private String extractPath(String header) {
-        int firstSpace = header.indexOf(' ');
-        int secondSpace = header.indexOf(' ', firstSpace + 1);
-        return header.substring(firstSpace + 1, secondSpace);
-    }
+
 
     private String extractRestHeader(String header) {
         int secondLine = header.indexOf('\r') + 2;
@@ -153,7 +142,6 @@ public class ServerHandler extends Thread {
         return null;
     }
 
-
     private void sendUnauthorizedResponse(String domain) throws IOException {
         String html = "<html><body><h1>Access to " + domain + " is not allowed!</h1></body></html>";
         String response = "HTTP/1.1 401 Not Authorized\r\n"
@@ -161,8 +149,9 @@ public class ServerHandler extends Thread {
                 + "Server: Custom Proxy Server\r\n"
                 + "Content-Length: " + html.length() + "\r\n"
                 + "Content-Type: text/html; charset=UTF-8\r\n\r\n" + html;
-        dOS.writeBytes(response);
+        ClientStream.writeBytes(response);
         conSock.close();
+        appendToLog("Unauthorized access attempt to domain: " + domain);
     }
 
     private void sendMethodNotAllowed() throws IOException {
@@ -170,8 +159,9 @@ public class ServerHandler extends Thread {
                 + "Date: " + new Date() + "\r\n"
                 + "Server: Custom Proxy Server\r\n"
                 + "Content-Length: 0\r\n\r\n";
-        dOS.writeBytes(response);
+        ClientStream.writeBytes(response);
         conSock.close();
+        appendToLog("Method not allowed");
     }
 
     private String readHeader(DataInputStream dis) throws IOException {
@@ -193,13 +183,27 @@ public class ServerHandler extends Thread {
     }
 
     private void handlePostRequest(String domain, String path, String restHeader) throws IOException {
-        // Add logic for handling POST requests
+        URL url = new URL("http://" + domain + path);
+        String contentType = getHeaderValue("Content-Type", restHeader);
+        int contentLength = Integer.parseInt(getHeaderValue("Content-Length", restHeader));
+
+        byte[] requestBody = new byte[contentLength];
+        ServerStream.readFully(requestBody);  // Read the full POST body
+
+        byte[] response = fetchFromServer(url, "POST", restHeader, requestBody);
+        cacheResource(path, response);  // Cache the POST response (if appropriate based on caching rules)
+
+        sendToClient(url, response);
+        appendToLog("POST request handled for domain: " + domain);
     }
+
 
     private void handleOptionsRequest(String domain, String path, String restHeader) throws IOException {
-        // Add logic for handling OPTIONS requests
+        URL url = new URL("http://" + domain + path);
+        byte[] response = fetchFromServer(url, "OPTIONS", restHeader, new byte[0]);
+        sendToClient(url, response);
+        appendToLog("OPTIONS request handled for domain: " + domain);
     }
-
 
     private String getHeaderValue(String headerName, String headers) {
         // Simple parse to extract a header value from raw headers string
@@ -210,69 +214,49 @@ public class ServerHandler extends Thread {
         return headers.substring(start, end);
     }
 
-
-
     private void cacheResource(String path, byte[] data) throws IOException {
         File file = new File(CACHE_DIR, path.replace("/", "_"));
         try (FileOutputStream fos = new FileOutputStream(file)) {
             fos.write(data);
         }
         cacheMap.put(path, file);
+        appendToLog("Resource cached for path: " + path);
     }
-
-    private void sendNotModifiedResponse() throws IOException {
-        dOS.writeBytes("HTTP/1.1 304 Not Modified\r\n");
-        dOS.writeBytes("\r\n");
-        dOS.flush();
-    }
-
-
 
     private void handleGetHeadRequest(String method, String domain, String path, String restHeader) throws IOException, ParseException {
-        File cachedFile = cacheMap.get(path);
-        boolean isCached = cachedFile != null && cachedFile.exists();
-        byte[] data = null;
+        URL url = new URL("http://" + domain + path);
+        String urlString = url.toString();
 
-        if (isCached) {
-            // Check if the cached version is still fresh
-            Date lastModified = new Date(cachedFile.lastModified());
-            String ifModifiedSince = getHeaderValue("If-Modified-Since", restHeader);
-            if (ifModifiedSince != null) {
-                SimpleDateFormat sdf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
-                sdf.setTimeZone(TimeZone.getTimeZone("GMT"));
-                Date ifModifiedSinceDate = sdf.parse(ifModifiedSince);
-                if (lastModified.compareTo(ifModifiedSinceDate) < 0) {
-                    sendNotModifiedResponse();
-                    return;
-                }
+        // Check cache first
+        if (cache.containsKey(urlString)) {
+            CachedResources cachedResource = cache.get(urlString);
+            if (!cachedResource.isExpired()) {
+                byte[] data = cachedResource.getData();
+                sendToClient(url, data);  // Use the cached data if not expired
+                logCachedDataSent(urlString, conSock.getInetAddress().getHostAddress());  // Log the event
+                return;  // Return after handling with cached data
             }
-            data = Files.readAllBytes(cachedFile.toPath());
         }
 
-        if (data == null) {  // Fetch new data if not cached or cache is stale
-            URL url = new URL("http://" + domain + path);
-            data = fetchFromServer(url, method, restHeader);
-            cacheResource(path, data);
-        }
-
-        sendToClient(new URL("http://" + domain + path), data);
+        // Fetch new data if not cached or cache is stale
+        byte[] data = fetchFromServer(url, method, restHeader, new byte[0]);
+        cache.put(urlString, new CachedResources(data, System.currentTimeMillis()));  // Cache the new data
+        sendToClient(url, data);  // Send the newly fetched data to the client
+        appendToLog("GET/HEAD request handled for domain: " + domain);
     }
 
-
-
-    private byte[] fetchFromServer(URL url, String method, String headers) throws IOException {
+    private byte[] fetchFromServer(URL url, String method, String headers, byte[] body) throws IOException {
         try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
              InputStream serverInputStream = socket.getInputStream();
              OutputStream serverOutputStream = socket.getOutputStream();
              ByteArrayOutputStream responseStream = new ByteArrayOutputStream();
              PrintWriter writer = new PrintWriter(serverOutputStream, true)) {
 
-            // Manage headers to avoid duplicates
+            // Set up the request headers and body
             Set<String> headerSet = new HashSet<>();
             StringBuilder requestBuilder = new StringBuilder();
             requestBuilder.append(method).append(" ").append(url.getFile()).append(" HTTP/1.1\r\n");
 
-            // Split headers and add them if not already added
             String[] lines = headers.split("\r\n");
             for (String line : lines) {
                 int colonIndex = line.indexOf(':');
@@ -285,31 +269,53 @@ public class ServerHandler extends Thread {
                 }
             }
 
-            // Add Host if not already included
+            // Add Host header if missing
             if (!headerSet.contains("Host")) {
                 requestBuilder.append("Host: ").append(url.getHost()).append("\r\n");
             }
 
             requestBuilder.append("Connection: close\r\n\r\n");
-
-            // Log the complete request for debugging
-            System.out.println("Complete Request:\n" + requestBuilder.toString());
-
-            // Send the request
             writer.print(requestBuilder.toString());
             writer.flush();
 
-            // Read and print the response for debugging
+            // Send the body if it exists (important for POST requests)
+            if (body.length > 0) {
+                serverOutputStream.write(body);
+                serverOutputStream.flush();
+            }
+
+            // Read the response
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
             while ((bytesRead = serverInputStream.read(buffer)) != -1) {
                 responseStream.write(buffer, 0, bytesRead);
-                System.out.write(buffer, 0, bytesRead);  // Print the raw response for debugging
             }
 
             return responseStream.toByteArray();
         }
     }
 
+    private String extractPath(String header) {
+        int firstSpace = header.indexOf(' ');
+        int secondSpace = header.indexOf(' ', firstSpace + 1);
+        String path = header.substring(firstSpace + 1, secondSpace);
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            try {
+                URL url = new URL(path);
+                return url.getFile(); // This gets the path part after the domain
+            } catch (MalformedURLException e) {
+                System.err.println("Malformed URL: " + path);
+            }
+        }
+        return path;
+    }
 
+
+    private void logCachedDataSent(String url, String clientIP) {
+        appendToLog("Cached data for URL: " + url + " sent to client IP: " + clientIP + "\n");
+    }
+
+    private void appendToLog(String message) {
+        Platform.runLater(() -> logTextArea.appendText(message + "\n"));
+    }
 }
