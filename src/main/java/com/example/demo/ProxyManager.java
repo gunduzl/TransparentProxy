@@ -1,31 +1,27 @@
 package com.example.demo;
 
+
+import java.util.HashMap;
+import java.util.Map;
+
 public class ProxyManager {
 
-    private Proxy proxy;
+    private final Map<String, CacheEntry> cache;
 
     public ProxyManager() {
-        this.proxy = new Proxy();
+        this.cache = new HashMap<>();
     }
 
-    public void start(int port) {
-        if (!proxy.isRunning()) {
-            proxy.startProxy();
-        } else {
-            System.out.println("Proxy is already running.");
-        }
+    public synchronized CacheEntry getCacheEntry(String url) {
+        return cache.get(url);
     }
 
-    public void stop() {
-        if (proxy.isRunning()) {
-            proxy.stopProxy();
-            System.out.println("Proxy server stopped.");
-        } else {
-            System.out.println("Proxy server is not running.");
-        }
+    public synchronized void putCacheEntry(String url, CacheEntry cacheEntry) {
+        cache.put(url, cacheEntry);
     }
 
-    public boolean isProxyRunning() {
-        return proxy.isRunning();
+    public synchronized void clearCache() {
+        cache.clear();
     }
+
 }

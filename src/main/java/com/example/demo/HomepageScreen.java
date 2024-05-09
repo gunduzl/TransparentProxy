@@ -3,14 +3,14 @@ package com.example.demo;
 import javafx.application.Platform;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
-import javafx.scene.control.Label;
-import javafx.scene.control.Menu;
-import javafx.scene.control.MenuBar;
-import javafx.scene.control.MenuItem;
+import javafx.scene.control.*;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
-import javafx.scene.control.*;
+
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,8 +20,11 @@ public class HomepageScreen {
     private final Stage primaryStage;
     private ProxyManager proxyManager;
     private FilteredListManager filteredListManager;
+    private ServerSocket serverSocket;
+    private volatile boolean isRunning = false;
+    private Thread proxyThread;
 
-    public HomepageScreen(Stage primaryStage, ProxyManager proxyManager,FilteredListManager filteredListManager ) {
+    public HomepageScreen(Stage primaryStage, ProxyManager proxyManager, FilteredListManager filteredListManager) {
         this.primaryStage = primaryStage;
         this.proxyManager = proxyManager;
         this.filteredListManager = filteredListManager;
@@ -46,53 +49,75 @@ public class HomepageScreen {
         startButton.setOnAction(e -> startProxy());
         stopButton.setOnAction(e -> stopProxy());
     }
+
     public void show() {
         primaryStage.setScene(scene);
     }
 
     private void startProxy() {
         int port = 8080; // Default port number
+        try {
+            serverSocket = new ServerSocket(port);
+            updateStatus("Proxy Status: Starting...");
 
-        Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
-        statusLabel.setText("Proxy Status: Starting...");
+            proxyThread = new Thread(() -> {
+                try {
+                    isRunning = true;
+                    while (isRunning && !Thread.currentThread().isInterrupted()) {
+                        try {
+                            Socket incoming = serverSocket.accept();
+                            new ServerHandler(incoming,filteredListManager).start();
+                        } catch (IOException e) {
+                            if (isRunning) { // Only log unexpected errors.
+                                logError("Error accepting connection: " + e.getMessage());
+                            }
+                        }
+                    }
+                } finally {
+                    updateStatus("Proxy Status: Stopped");
+                }
+            });
+            proxyThread.start();
+            updateStatus("Proxy Status: Running on port " + port);
+        } catch (IOException e) {
+            logError("Error starting proxy server: " + e.getMessage());
+            updateStatus("Proxy Status: Failed to start");
+        }
+    }
 
-        Thread thread = new Thread(() -> {
-            try {
-                proxyManager.start(port);
-            } catch (Exception e) {
-                Platform.runLater(() -> {
-                    Alert alert = new Alert(Alert.AlertType.ERROR);
-                    alert.setTitle("Error Starting Proxy");
-                    alert.setHeaderText(null);
-                    alert.setContentText("An error occurred while starting the proxy: " + e.getMessage());
-                    alert.showAndWait();
-                });
-            }
+    private void updateStatus(String message) {
+        Platform.runLater(() -> {
+            Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
+            statusLabel.setText(message);
         });
-        thread.start();
+    }
+
+    private void logError(String error) {
+        System.out.println(error);  // Replace this with a more robust logging approach
     }
 
 
     private void stopProxy() {
-        proxyManager.stop();
-        Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
-        statusLabel.setText("Proxy Status: Stopping...");
+        if (!isRunning) {
+            updateStatus("Proxy Status: Already Stopped");
+            return;
+        }
 
-        Thread thread = new Thread(() -> {
-            while(proxyManager.isProxyRunning()) {
-                try {
-                    Thread.sleep(100); // Check every 100 milliseconds if the proxy has stopped
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+        try {
+            isRunning = false; // Signal the thread to stop accepting new connections
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                serverSocket.close(); // This will cause serverSocket.accept() to throw a SocketException
             }
-            Platform.runLater(() -> {
-                statusLabel.setText("Proxy Status: Stopped");
-            });
-        });
-        thread.start();
+            if (proxyThread != null && proxyThread.isAlive()) {
+                proxyThread.interrupt(); // Ensure any blocking operations are interrupted
+                proxyThread.join(3000); // Wait for the thread to finish with a timeout
+            }
+            updateStatus("Proxy Status: Stopped");
+        } catch (IOException | InterruptedException e) {
+            logError("Error occurred while closing the proxy: " + e.getMessage());
+            updateStatus("Proxy Status: Error stopping");
+        }
     }
-
 
 
 
@@ -121,14 +146,6 @@ public class HomepageScreen {
         return fileMenu;
     }
 
-    private void displayReport() {
-        /*
-         Logic to display report
-         This could involve showing a popup or navigating to a new scene
-        */
-
-    }
-
     private void addHostToFilter() {
         TextInputDialog dialog = new TextInputDialog();
         dialog.setTitle("Add Host to Filter");
@@ -145,7 +162,6 @@ public class HomepageScreen {
         });
     }
 
-
     private void displayFilteredHosts() {
         List<String> filteredHosts = filteredListManager.getFilteredHosts();
         StringBuilder message = new StringBuilder("Filtered Hosts:\n");
@@ -158,7 +174,6 @@ public class HomepageScreen {
         alert.setContentText(message.toString());
         alert.showAndWait();
     }
-
 
     private Menu createHelpMenu() {
         Menu helpMenu = new Menu("Help");
@@ -173,9 +188,14 @@ public class HomepageScreen {
         // This could involve showing a popup or navigating to a new scene
     }
 
+    private void displayReport() {
+        /*
+         Logic to display report
+         This could involve showing a popup or navigating to a new scene
+        */
+    }
+
     public Scene getScene() {
         return scene;
     }
 }
-
-
