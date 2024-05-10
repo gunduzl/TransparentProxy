@@ -58,18 +58,24 @@ public class LoginScreen {
     }
 
     private static void handleLogin(Stage primaryStage, TextField nameField, PasswordField passwordField) {
-        String username = nameField.getText();
+        String username = nameField.getText().trim();
         String password = passwordField.getText();
 
         try (Connection connection = DatabaseConnection.getConnection();
-             PreparedStatement statement = connection.prepareStatement("SELECT * FROM users WHERE username = ? AND password = ?")) {
+             PreparedStatement statement = connection.prepareStatement("SELECT id, username, password FROM customer WHERE username = ? AND password = ?")) {
             statement.setString(1, username);
             statement.setString(2, password);
             ResultSet resultSet = statement.executeQuery();
             if (resultSet.next()) {
+                int customerId = resultSet.getInt("id");
                 // Successful login
                 Map<String, CachedResources> cache = new HashMap<>(); // Create or get your cache here
-                HomepageScreen homepageScreen = new HomepageScreen(primaryStage, new ProxyManager(), new FilteredListManager(), cache);
+
+                // Assuming `isLoginBefore` is true and no `RequestLogEntry` initially.
+                // Now using fetched 'id' to construct the Customer.
+                Customer customer = new Customer(customerId, username, password, true, null);
+
+                HomepageScreen homepageScreen = new HomepageScreen(primaryStage, new ProxyManager(), new FilteredListManager(), cache, customer);
                 homepageScreen.show(); // Show the HomepageScreen
             } else {
                 // Invalid credentials
@@ -80,7 +86,11 @@ public class LoginScreen {
                 alert.showAndWait();
             }
         } catch (SQLException ex) {
-            ex.printStackTrace(); // Handle exception properly
+            Alert errorAlert = new Alert(Alert.AlertType.ERROR);
+            errorAlert.setTitle("Database Error");
+            errorAlert.setHeaderText(null);
+            errorAlert.setContentText("A database error occurred.");
+            errorAlert.showAndWait();
+            ex.printStackTrace(); // Consider logging this error as well
         }
-    }
-}
+    }}

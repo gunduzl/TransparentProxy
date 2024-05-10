@@ -28,16 +28,32 @@ public class FilteredListManager {
         }
     }
 
-    public void removeHost(String host) {
+
+    public boolean isHostExist(String host) {
+        try {
+            PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) FROM filtered_hosts WHERE host = ?");
+            statement.setString(1, host);
+            ResultSet resultSet = statement.executeQuery();
+            resultSet.next();
+            return resultSet.getInt(1) > 0;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public boolean removeHost(String host) {
         try {
             PreparedStatement statement = connection.prepareStatement("DELETE FROM filtered_hosts WHERE host = ?");
             statement.setString(1, host);
-            statement.executeUpdate();
+            int affectedRows = statement.executeUpdate();
+            return affectedRows > 0;
         } catch (SQLException e) {
             e.printStackTrace();
-            // Handle exception appropriately
+            return false;
         }
     }
+
 
     public boolean isFilteredHost(String host) {
         try {

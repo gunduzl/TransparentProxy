@@ -13,6 +13,7 @@ public class TransparentProxy extends Application {
     private final ProxyManager proxyManager = new ProxyManager();
     private final FilteredListManager filteredListManager = new FilteredListManager();
     private Map<String, CachedResources> cache = new HashMap<>();
+    private Customer currentCustomer;
 
 
     @Override
@@ -25,7 +26,7 @@ public class TransparentProxy extends Application {
 
 
     private void showHomepage(Stage primaryStage) {
-        HomepageScreen homepageScreen = new HomepageScreen(primaryStage, proxyManager, filteredListManager, cache);
+        HomepageScreen homepageScreen = new HomepageScreen(primaryStage, proxyManager, filteredListManager, cache, currentCustomer);
         primaryStage.setScene(homepageScreen.getScene());
         
     }
