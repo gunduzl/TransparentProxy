@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import javax.net.ssl.*;
 
@@ -24,6 +25,8 @@ public class ServerHandler extends Thread {
     private final TextArea logTextArea;
     private ConcurrentMap<String, CachedResources> cache; // Thread-safe cache implementation
     private final Customer customer;
+    private static final ConcurrentMap<String, Boolean> clientFilterStatus = new ConcurrentHashMap<>();
+
 
     // Caching mechanism
     private static final String CACHE_DIR = "./cache";
@@ -49,85 +52,169 @@ public class ServerHandler extends Thread {
     @Override
     public void run() {
         try {
+            String clientIP = connection.getInetAddress().getHostAddress();
+            appendToLog("Connection accepted from IP: " + clientIP);
+
+            // Always send the login page first for new IP
+            if (!clientFilterStatus.containsKey(clientIP)) {
+                sendLoginPage();
+                // Wait for the client to send the token and handle it
+                waitForTokenAndHandle();
+            }
+
+            boolean applyFiltering = clientFilterStatus.getOrDefault(clientIP, false);
+            appendToLog("Filtering for " + clientIP + " is " + (applyFiltering ? "enabled" : "disabled"));
+
+            // Now handle the request
             if (isHttpsConnection(connection)) {
                 handleHttpsConnection(connection);
             } else {
-                System.out.println("Handling connection from " + connection.getInetAddress().getHostAddress());
-                appendToLog("Handling connection from " + connection.getInetAddress().getHostAddress());
-
-                String header = readHeader(ServerStream);
-                if (header.isEmpty()) {
-                    System.err.println("Received empty header, ignoring the request.");
-                    appendToLog("Received empty header, ignoring the request.");
-                    return; // Ignore this request or handle it as per your requirements
-                }
-
-                System.out.println("Received header: " + header);
-                appendToLog("Received header: " + header);
-
-                String method = extractMethod(header);
-                if ("INVALID".equals(method)) {
-                    System.err.println("Invalid request method, ignoring the request.");
-                    appendToLog("Invalid request method, ignoring the request.");
-                    return; // Ignore this request or handle it as per your requirements
-                }
-
-                String path = extractPath(header, method);
-                if (path.isEmpty()) {
-                    System.err.println("Invalid path, ignoring the request.");
-                    appendToLog("Invalid path, ignoring the request.");
-                    return; // Ignore this request or handle it as per your requirements
-                }
-
-                String restHeader = extractRestHeader(header);
-                String host = extractHost(restHeader);
-                if (host == null) {
-                    host = "example.com";
-                }
-
-                String fullUrl;
-                if (method.equals("CONNECT")) {
-                    fullUrl = "https://" + path; // For CONNECT, path includes host:port
-                } else {
-                    fullUrl = "http://" + host + path; // Standard HTTP requests
-                }
-
-                URL url = new URL(fullUrl);
-                String domain = url.getHost();
-                String urlPath = url.getPath();
-
-                if (filteredListManager.isFilteredHost(domain)) {
-                    sendUnauthorizedResponse(domain);
-                    return;
-                }
-
-                System.out.println("Request method: " + method + ", Domain: " + domain + ", Path: " + urlPath);
-                appendToLog("Request method: " + method + ", Domain: " + domain + ", Path: " + urlPath);
-                logRequest(domain, urlPath, method, 200);
-                switch (method.toUpperCase()) {
-                    case "GET":
-                    case "HEAD":
-                        handleGetHeadRequest(method, domain, urlPath, restHeader);
-                        break;
-                    case "POST":
-                        handlePostRequest(domain, urlPath, restHeader);
-                        break;
-                    case "OPTIONS":
-                        handleOptionsRequest(domain, urlPath, restHeader);
-                        break;
-                    case "CONNECT":
-                        handleConnectRequest(domain, path);
-                        break;
-                    default:
-                        sendMethodNotAllowed();
-                }
+                handleRequest(applyFiltering);
             }
         } catch (Exception e) {
-            e.printStackTrace();
             appendToLog("Error processing the request: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            try {
+                connection.close();
+                appendToLog("Connection closed for IP: " + connection.getInetAddress().getHostAddress());
+            } catch (IOException e) {
+                appendToLog("Failed to close connection: " + e.getMessage());
+            }
         }
     }
 
+    private void waitForTokenAndHandle() throws IOException {
+        // Read headers or tokens from the client
+        String header = readHeader(ServerStream);
+        if (header != null && header.contains("submitToken")) {
+            handleTokenSubmission(header);
+        }
+    }
+
+
+    private void handleRequest(boolean applyFiltering) throws IOException, ParseException {
+        while (true) {
+            String header = readHeader(ServerStream);
+            if (header == null || header.isEmpty()) {
+                System.out.println("No more data received, closing connection.");
+                break;  // Exit if no more data is received, indicating end of requests or connection close
+            }
+
+            if (header.contains("submitToken")) {
+                handleTokenSubmission(header);
+                continue;  // Continue to next request after handling token
+            }
+
+            // Log the received header for debugging
+            System.out.println("Received header: " + header);
+            appendToLog("Received header: " + header);
+
+            String method = extractMethod(header);
+            if ("INVALID".equals(method)) {
+                System.err.println("Invalid request method, ignoring the request.");
+                appendToLog("Invalid request method, ignoring the request.");
+                continue;  // Skip to the next loop iteration for next request
+            }
+
+            String path = extractPath(header, method);
+            if (path.isEmpty()) {
+                System.err.println("Invalid path, ignoring the request.");
+                appendToLog("Invalid path, ignoring the request.");
+                continue;  // Skip to the next loop iteration for next request
+            }
+
+            String restHeader = extractRestHeader(header);
+            String host = extractHost(restHeader);
+            if (host == null) {
+                host = "example.com";  // Default host if none specified
+            }
+
+            String fullUrl = constructFullUrl(host, path, method);
+            URL url = new URL(fullUrl);
+            String domain = url.getHost();
+            String urlPath = url.getPath();
+
+            // Filtering based on domain and client preference
+            if (applyFiltering && filteredListManager.isFilteredHost(domain)) {
+                sendUnauthorizedResponse(domain);
+                continue;  // Continue to handle next requests after blocking access to a filtered domain
+            }
+
+            System.out.println("Processing request for URL: " + fullUrl);
+            appendToLog("Request method: " + method + ", Domain: " + domain + ", Path: " + urlPath);
+
+            // Logging and handling based on the request method
+            logRequest(domain, urlPath, method, 200);
+            switch (method.toUpperCase()) {
+                case "GET":
+                case "HEAD":
+                    handleGetHeadRequest(method, domain, urlPath, restHeader);
+                    break;
+                case "POST":
+                    handlePostRequest(domain, urlPath, restHeader);
+                    break;
+                case "OPTIONS":
+                    handleOptionsRequest(domain, urlPath, restHeader);
+                    break;
+                case "CONNECT":
+                    handleConnectRequest(domain, path);
+                    break;
+                default:
+                    sendMethodNotAllowed();
+            }
+        }
+    }
+
+
+    private String constructFullUrl(String host, String path, String method) {
+        if (method.equals("CONNECT")) {
+            return "https://" + path; // For CONNECT, path includes host:port
+        } else {
+            return "http://" + host + path; // Standard HTTP requests
+        }
+    }
+
+
+
+    private void handleTokenSubmission(String header) {
+        String token = extractTokenFromHeader(header);
+        String clientIP = connection.getInetAddress().getHostAddress();
+
+        if ("8a21bce200".equals(token)) {
+            clientFilterStatus.put(clientIP, false);
+        } else if ("51e2cba401".equals(token)) {
+            clientFilterStatus.put(clientIP, true);
+        }
+
+        appendToLog("Token received: " + token + " from " + clientIP);
+    }
+
+    private String extractTokenFromHeader(String header) {
+        return header.split("token=")[1].split(" ")[0];
+    }
+
+    private boolean isRequestFiltered(String header) {
+        String host = extractHost(header);
+        return filteredListManager.isFilteredHost(host);
+    }
+
+
+
+
+
+    private void sendLoginPage() throws IOException {
+        String loginPageHTML = "<html><body><form action='submitToken' method='GET'>" +
+                "Token: <input type='text' name='token'><br>" +
+                "<input type='submit' value='Submit'></form></body></html>";
+
+        String httpResponse = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=UTF-8\r\n" +
+                "Content-Length: " + loginPageHTML.length() + "\r\n\r\n" +
+                loginPageHTML;
+        ClientStream.writeBytes(httpResponse);
+        appendToLog("Login page sent to client.");
+    }
 
     private boolean isHttpsConnection(Socket socket) {
         // Simple check: often HTTPS connections use port 443

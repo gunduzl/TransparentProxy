@@ -95,4 +95,5 @@ public class LoginScreen {
             errorAlert.showAndWait();
             ex.printStackTrace(); // Consider logging this error as well
         }
-    }}
+    }
+}
