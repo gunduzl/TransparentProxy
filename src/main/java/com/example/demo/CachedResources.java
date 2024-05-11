@@ -2,17 +2,22 @@ package com.example.demo;
 
 import java.net.URL;
 public class CachedResources {
-    private byte[] data; // The data of the cached resource
-    private long timestamp; // Timestamp when the data was cached
-    private static final long EXPIRATION_TIME = 300000; // 5 minutes in milliseconds
+    private byte[] data;
+    private long lastModifiedTimestamp;
+    private long timestamp;
 
-    public CachedResources(byte[] data, long timestamp) {
+    public CachedResources(byte[] data, long lastModifiedTimestamp) {
         this.data = data;
-        this.timestamp = timestamp;
+        this.lastModifiedTimestamp = lastModifiedTimestamp;
+        this.timestamp = System.currentTimeMillis();
     }
 
     public byte[] getData() {
         return data;
+    }
+
+    public long getLastModifiedTimestamp() {
+        return lastModifiedTimestamp;
     }
 
     public boolean isExpired() {
@@ -20,3 +25,4 @@ public class CachedResources {
         return duration > 300000; // 5 minutes expiration
     }
 }
+

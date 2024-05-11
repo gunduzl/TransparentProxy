@@ -21,25 +21,24 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentMap;
 
 public class HomepageScreen {
 
     private final Scene scene;
     private final Stage primaryStage;
-    private ProxyManager proxyManager;
     private FilteredListManager filteredListManager;
     private ServerSocket serverSocket;
     private volatile boolean isRunning = false;
     private Thread proxyThread;
     private final TextArea logTextArea;
-    private Map<String, CachedResources> cache;
+    private ConcurrentMap<String, CachedResources> cache;
     private final Customer currentCustomer;
 
 
 
-    public HomepageScreen(Stage primaryStage, ProxyManager proxyManager, FilteredListManager filteredListManager, Map<String, CachedResources> cache, Customer currentCustomer) {
+    public HomepageScreen(Stage primaryStage, FilteredListManager filteredListManager, ConcurrentMap<String, CachedResources> cache, Customer currentCustomer) {
         this.primaryStage = primaryStage;
-        this.proxyManager = proxyManager;
         this.filteredListManager = filteredListManager;
         this.cache = cache;
         this.currentCustomer = currentCustomer;

@@ -9,8 +9,9 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
 import javax.net.ssl.*;
 
 public class ServerHandler extends Thread {
@@ -18,18 +19,17 @@ public class ServerHandler extends Thread {
     private final FilteredListManager filteredListManager;
     private DataInputStream ServerStream;
     private DataOutputStream ClientStream;
-    private static final int BUFFER_SIZE = 8192; //
+    private static final int BUFFER_SIZE = 8192; // 8 KB
     private static final int MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
-    private static final int MAX_CACHE_SIZE = 100; // Maximum number of cached resources
     private final TextArea logTextArea;
-    private Map<String, CachedResources> cache;
+    private ConcurrentMap<String, CachedResources> cache; // Thread-safe cache implementation
     private final Customer customer;
 
     // Caching mechanism
     private static final String CACHE_DIR = "./cache";
     private Map<String, File> cacheMap = new HashMap<>();
 
-    public ServerHandler(Socket c, FilteredListManager filteredListManager, TextArea logTextArea, Map<String, CachedResources> cache, Customer customer) {
+    public ServerHandler(Socket c, FilteredListManager filteredListManager, TextArea logTextArea,ConcurrentMap<String, CachedResources> cache, Customer customer) {
         connection = c;
         this.filteredListManager = filteredListManager;
         this.logTextArea = logTextArea;
@@ -43,11 +43,6 @@ public class ServerHandler extends Thread {
             appendToLog("ServerHandler initialized for: " + connection);
         } catch (IOException e) {
             System.err.println("Error initializing ServerHandler: " + e.getMessage());
-            try {
-                connection.close();
-            } catch (IOException ex) {
-                System.err.println("Error closing socket: " + ex.getMessage());
-            }
         }
     }
 
@@ -61,14 +56,31 @@ public class ServerHandler extends Thread {
                 appendToLog("Handling connection from " + connection.getInetAddress().getHostAddress());
 
                 String header = readHeader(ServerStream);
+                if (header.isEmpty()) {
+                    System.err.println("Received empty header, ignoring the request.");
+                    appendToLog("Received empty header, ignoring the request.");
+                    return; // Ignore this request or handle it as per your requirements
+                }
+
                 System.out.println("Received header: " + header);
                 appendToLog("Received header: " + header);
 
                 String method = extractMethod(header);
+                if ("INVALID".equals(method)) {
+                    System.err.println("Invalid request method, ignoring the request.");
+                    appendToLog("Invalid request method, ignoring the request.");
+                    return; // Ignore this request or handle it as per your requirements
+                }
+
                 String path = extractPath(header, method);
+                if (path.isEmpty()) {
+                    System.err.println("Invalid path, ignoring the request.");
+                    appendToLog("Invalid path, ignoring the request.");
+                    return; // Ignore this request or handle it as per your requirements
+                }
+
                 String restHeader = extractRestHeader(header);
                 String host = extractHost(restHeader);
-
                 if (host == null) {
                     host = "example.com";
                 }
@@ -81,7 +93,6 @@ public class ServerHandler extends Thread {
                 }
 
                 URL url = new URL(fullUrl);
-
                 String domain = url.getHost();
                 String urlPath = url.getPath();
 
@@ -113,13 +124,16 @@ public class ServerHandler extends Thread {
             }
         } catch (Exception e) {
             e.printStackTrace();
+            appendToLog("Error processing the request: " + e.getMessage());
         }
     }
+
 
     private boolean isHttpsConnection(Socket socket) {
         // Simple check: often HTTPS connections use port 443
         return socket.getPort() == 443;
     }
+
 
     private void sendToClient(URL url, byte[] cachedData) throws IOException {
         try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
@@ -140,10 +154,9 @@ public class ServerHandler extends Thread {
                 ClientStream.write(buffer, 0, bytesRead);
             }
             ClientStream.flush();
-        } finally {
-            connection.close();
         }
     }
+
 
     private String extractMethod(String header) {
         int firstSpace = header.indexOf(' ');
@@ -155,8 +168,6 @@ public class ServerHandler extends Thread {
         }
         return header.substring(0, firstSpace);
     }
-
-
 
 
     private String extractRestHeader(String header) {
@@ -180,6 +191,7 @@ public class ServerHandler extends Thread {
         return null;
     }
 
+
     private void sendUnauthorizedResponse(String domain) throws IOException {
         String html = "<html><body><h1>Access to " + domain + " is not allowed!</h1></body></html>";
         String response = "HTTP/1.1 401 Not Authorized\r\n"
@@ -188,9 +200,9 @@ public class ServerHandler extends Thread {
                 + "Content-Length: " + html.length() + "\r\n"
                 + "Content-Type: text/html; charset=UTF-8\r\n\r\n" + html;
         ClientStream.writeBytes(response);
-        connection.close();
         appendToLog("Unauthorized access attempt to domain: " + domain);
     }
+
 
     private void sendMethodNotAllowed() throws IOException {
         String response = "HTTP/1.1 405 Method Not Allowed\r\n"
@@ -198,9 +210,9 @@ public class ServerHandler extends Thread {
                 + "Server: Custom Proxy Server\r\n"
                 + "Content-Length: 0\r\n\r\n";
         ClientStream.writeBytes(response);
-        connection.close();
         appendToLog("Method not allowed");
     }
+
 
     private String readHeader(DataInputStream dis) throws IOException {
         ByteArrayOutputStream headerOut = new ByteArrayOutputStream();
@@ -246,13 +258,13 @@ public class ServerHandler extends Thread {
     }
 
 
-
     private void handleOptionsRequest(String domain, String path, String restHeader) throws IOException {
         URL url = new URL("http://" + domain + path);
         byte[] response = fetchFromServer(url, "OPTIONS", restHeader, new byte[0]);
         sendToClient(url, response);
         appendToLog("OPTIONS request handled for domain: " + domain);
     }
+
 
     private String getHeaderValue(String headerName, String headers) {
         // Simple parse to extract a header value from raw headers string
@@ -263,6 +275,7 @@ public class ServerHandler extends Thread {
         return headers.substring(start, end);
     }
 
+
     private void cacheResource(String path, byte[] data) throws IOException {
         File file = new File(CACHE_DIR, path.replace("/", "_"));
         try (FileOutputStream fos = new FileOutputStream(file)) {
@@ -272,79 +285,172 @@ public class ServerHandler extends Thread {
         appendToLog("Resource cached for path: " + path);
     }
 
+
     private void handleGetHeadRequest(String method, String domain, String path, String restHeader) throws IOException, ParseException {
         URL url = new URL("http://" + domain + path);
         String urlString = url.toString();
+        String ifModifiedSince = null;
 
         // Check cache first
         if (cache.containsKey(urlString)) {
             CachedResources cachedResource = cache.get(urlString);
             if (!cachedResource.isExpired()) {
-                byte[] data = cachedResource.getData();
-                sendToClient(url, data);  // Use the cached data if not expired
-                logCachedDataSent(urlString, connection.getInetAddress().getHostAddress());  // Log the event
-                return;  // Return after handling with cached data
+                SimpleDateFormat formatter = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
+                ifModifiedSince = formatter.format(new Date(cachedResource.getLastModifiedTimestamp()));
             }
         }
 
-        // Fetch new data if not cached or cache is stale
-        byte[] data = fetchFromServer(url, method, restHeader, new byte[0]);
-        cache.put(urlString, new CachedResources(data, System.currentTimeMillis()));  // Cache the new data
-        sendToClient(url, data);  // Send the newly fetched data to the client
+        byte[] data = fetchFromServerWithConditionalGet(url, method, restHeader, ifModifiedSince);
+
+        // Handle non-modified status (304 Not Modified)
+        if (data == null && ifModifiedSince != null) {
+            data = cache.get(urlString).getData(); // Use cached data
+            logCachedDataSent(urlString, connection.getInetAddress().getHostAddress());
+            appendToLog("Cached data sent for URL: " + urlString);
+        } else if (data != null) {
+            long lastModified = parseLastModified(restHeader); // Extract last-modified date from response headers
+            cache.put(urlString, new CachedResources(data, lastModified));  // Update the cache
+        }
+
+        sendToClient(url, data);
         appendToLog("GET/HEAD request handled for domain: " + domain);
     }
 
 
-
-    private byte[] fetchFromServer(URL url, String method, String headers, byte[] body) throws IOException {
+    private byte[] fetchFromServerWithConditionalGet(URL url, String method, String headers, String ifModifiedSince) throws IOException {
         try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
              InputStream serverInputStream = socket.getInputStream();
              OutputStream serverOutputStream = socket.getOutputStream();
              ByteArrayOutputStream responseStream = new ByteArrayOutputStream();
              PrintWriter writer = new PrintWriter(serverOutputStream, true)) {
 
-            // Set up the request headers and body
-            Set<String> headerSet = new HashSet<>();
             StringBuilder requestBuilder = new StringBuilder();
-            requestBuilder.append(method).append(" ").append(url.getFile()).append(" HTTP/1.1\r\n");
-
-            String[] lines = headers.split("\r\n");
-            for (String line : lines) {
-                int colonIndex = line.indexOf(':');
-                if (colonIndex != -1) {
-                    String headerName = line.substring(0, colonIndex).trim();
-                    if (!headerSet.contains(headerName)) {
-                        requestBuilder.append(line).append("\r\n");
-                        headerSet.add(headerName);
-                    }
-                }
+            requestBuilder.append(method).append(" ").append(url.getFile()).append(" HTTP/1.1\r\n")
+                    .append("Host: ").append(url.getHost()).append("\r\n");
+            if (ifModifiedSince != null) {
+                requestBuilder.append("If-Modified-Since: ").append(ifModifiedSince).append("\r\n");
             }
-
-            // Add Host header if missing
-            if (!headerSet.contains("Host")) {
-                requestBuilder.append("Host: ").append(url.getHost()).append("\r\n");
-            }
-
             requestBuilder.append("Connection: close\r\n\r\n");
+
             writer.print(requestBuilder.toString());
             writer.flush();
 
-            // Send the body if it exists (important for POST requests)
-            if (body.length > 0) {
-                serverOutputStream.write(body);
-                serverOutputStream.flush();
-            }
-
-            // Read the response
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
             while ((bytesRead = serverInputStream.read(buffer)) != -1) {
                 responseStream.write(buffer, 0, bytesRead);
             }
 
+            // Check if the server responded with "304 Not Modified"
+            String responseHeader = responseStream.toString(StandardCharsets.UTF_8);
+            if (responseHeader.contains("304 Not Modified")) {
+                return null;  // No need to update the cache
+            }
+
             return responseStream.toByteArray();
         }
     }
+
+
+    private long parseLastModified(String headers) {
+        String[] lines = headers.split("\r\n");
+        SimpleDateFormat formatter = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
+        for (String line : lines) {
+            if (line.startsWith("Last-Modified:")) {
+                String dateString = line.substring(15).trim();
+                try {
+                    return formatter.parse(dateString).getTime();
+                } catch (ParseException e) {
+                    System.err.println("Failed to parse Last-Modified date: " + e.getMessage());
+                }
+            }
+        }
+        return System.currentTimeMillis();  // Default to current time if header not found or parsing fails
+    }
+
+
+    private byte[] fetchFromServer(URL url, String method, String headers, byte[] body) throws IOException {
+        Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
+        try (InputStream serverInputStream = socket.getInputStream();
+             OutputStream serverOutputStream = socket.getOutputStream();
+             ByteArrayOutputStream responseStream = new ByteArrayOutputStream();
+             PrintWriter writer = new PrintWriter(serverOutputStream, true)) {
+
+            socket.setSoTimeout(300000); // 5 minutes timeout
+
+            // Send request
+            StringBuilder requestBuilder = setupRequestHeaders(method, url, headers);
+            writer.print(requestBuilder.toString());
+            writer.flush();
+
+            // Send body if present (POST request)
+            if (body.length > 0) {
+                serverOutputStream.write(body);
+                serverOutputStream.flush();
+            }
+
+            // Read response headers to get Content-Length
+            long contentLength = getContentLength(serverInputStream);
+            if (contentLength > MAX_FILE_SIZE) {
+                throw new IOException("File size exceeds maximum limit: " + contentLength + " bytes");
+            }
+
+            // Read the response body
+            byte[] buffer = new byte[65536]; // 64 KB
+            int bytesRead;
+            long totalRead = 0;
+            while ((bytesRead = serverInputStream.read(buffer)) != -1) {
+                totalRead += bytesRead;
+                if (totalRead > MAX_FILE_SIZE) {
+                    throw new IOException("File size exceeded during download: " + totalRead + " bytes");
+                }
+                responseStream.write(buffer, 0, bytesRead);
+            }
+
+            return responseStream.toByteArray();
+        } finally {
+            socket.close();
+        }
+    }
+
+
+    private long getContentLength(InputStream inputStream) throws IOException {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+        String line;
+        long contentLength = -1;
+        while ((line = reader.readLine()) != null && !line.isEmpty()) {
+            if (line.toLowerCase().startsWith("content-length:")) {
+                contentLength = Long.parseLong(line.substring(line.indexOf(':') + 1).trim());
+                break;
+            }
+        }
+        return contentLength;
+    }
+
+
+    private StringBuilder setupRequestHeaders(String method, URL url, String headers) {
+        Set<String> headerSet = new HashSet<>();
+        StringBuilder requestBuilder = new StringBuilder();
+        requestBuilder.append(method).append(" ").append(url.getFile()).append(" HTTP/1.1\r\n");
+
+        String[] lines = headers.split("\r\n");
+        for (String line : lines) {
+            int colonIndex = line.indexOf(':');
+            if (colonIndex != -1) {
+                String headerName = line.substring(0, colonIndex).trim();
+                if (!headerSet.contains(headerName)) {
+                    requestBuilder.append(line).append("\r\n");
+                    headerSet.add(headerName);
+                }
+            }
+        }
+        if (!headerSet.contains("Host")) {
+            requestBuilder.append("Host: ").append(url.getHost()).append("\r\n");
+        }
+        requestBuilder.append("Connection: close\r\n\r\n");
+        return requestBuilder;
+    }
+
 
     private String extractPath(String header, String method) {
         int firstSpace = header.indexOf(' ');
@@ -371,7 +477,6 @@ public class ServerHandler extends Thread {
     }
 
 
-
     private void handleHttpsConnection(Socket clientSock) throws IOException {
         // Use the original clientSock and wrap it with the custom SSLSocketFactory
         SSLSocketFactory defaultFactory = (SSLSocketFactory) SSLSocketFactory.getDefault();
@@ -391,7 +496,7 @@ public class ServerHandler extends Thread {
                 return;
             }
 
-            // Assuming there's logic to determine the real server's port or it defaults to the same as the client's port
+            // Assuming there's logic to determine the real server's port it defaults to the same as the client's port
             try (Socket serverSocket = new Socket(hostname, sslSocket.getPort())) {
                 relayTraffic(sslSocket, serverSocket);
             }
@@ -400,6 +505,7 @@ public class ServerHandler extends Thread {
             e.printStackTrace();
         }
     }
+
 
     private String extractSni(SSLSocket sslSocket) {
         SSLSession session = sslSocket.getSession();
@@ -478,10 +584,6 @@ public class ServerHandler extends Thread {
     }
 
 
-
-
-
-
     private void relayTraffic(SSLSocket clientSocketInputStream, Socket serverSocketOutputStream) throws IOException {
         // Relay traffic between client and server without modifying it
         Thread clientToServer = new Thread(() -> {
@@ -510,13 +612,14 @@ public class ServerHandler extends Thread {
 
 
     private void relayData(InputStream in, OutputStream out) throws IOException {
-        byte[] buffer = new byte[4096];
+        byte[] buffer = new byte[BUFFER_SIZE];
         int read;
         while ((read = in.read(buffer)) != -1) {
             out.write(buffer, 0, read);
             out.flush();
         }
     }
+
 
     private void sendErrorResponse(OutputStream out, int statusCode, String message) {
         String response = "HTTP/1.1 " + statusCode + " " + message + "\r\n"
@@ -535,9 +638,11 @@ public class ServerHandler extends Thread {
         appendToLog("Cached data for URL: " + url + " sent to client IP: " + clientIP + "\n");
     }
 
+
     private void appendToLog(String message) {
         Platform.runLater(() -> logTextArea.appendText(message + "\n"));
     }
+
 
     private void logRequest(String domain, String resourcePath, String method, int statusCode) {
         RequestLogEntry logEntry = new RequestLogEntry(new Date(), connection.getInetAddress().getHostAddress(), domain, resourcePath, method, statusCode, customer);

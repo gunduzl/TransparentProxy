@@ -14,6 +14,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
 public class LoginScreen {
@@ -69,13 +71,13 @@ public class LoginScreen {
             if (resultSet.next()) {
                 int customerId = resultSet.getInt("id");
                 // Successful login
-                Map<String, CachedResources> cache = new HashMap<>(); // Create or get your cache here
+                ConcurrentMap<String, CachedResources> cache = new ConcurrentHashMap<>();// Create or get your cache here
 
                 // Assuming `isLoginBefore` is true and no `RequestLogEntry` initially.
                 // Now using fetched 'id' to construct the Customer.
                 Customer customer = new Customer(customerId, username, password, true, null);
 
-                HomepageScreen homepageScreen = new HomepageScreen(primaryStage, new ProxyManager(), new FilteredListManager(), cache, customer);
+                HomepageScreen homepageScreen = new HomepageScreen(primaryStage, new FilteredListManager(), cache, customer);
                 homepageScreen.show(); // Show the HomepageScreen
             } else {
                 // Invalid credentials

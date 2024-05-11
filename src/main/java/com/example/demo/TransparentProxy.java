@@ -6,13 +6,14 @@ import javafx.stage.Stage;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 
 public class TransparentProxy extends Application {
 
-    private final ProxyManager proxyManager = new ProxyManager();
     private final FilteredListManager filteredListManager = new FilteredListManager();
-    private Map<String, CachedResources> cache = new HashMap<>();
+    private ConcurrentMap<String, CachedResources> cache = new ConcurrentHashMap<>();
     private Customer currentCustomer;
 
 
@@ -23,13 +24,6 @@ public class TransparentProxy extends Application {
         primaryStage.show();
     }
 
-
-
-    private void showHomepage(Stage primaryStage) {
-        HomepageScreen homepageScreen = new HomepageScreen(primaryStage, proxyManager, filteredListManager, cache, currentCustomer);
-        primaryStage.setScene(homepageScreen.getScene());
-        
-    }
     public static void main(String[] args) {
         launch(args);
         System.setProperty("java.net.preferIPv4Stack", "true");
