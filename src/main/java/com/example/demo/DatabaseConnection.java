@@ -21,18 +21,4 @@ public class DatabaseConnection {
         return DriverManager.getConnection(DB_URL, USER, PASSWORD);
     }
 
-    public void storeInDatabase(String url, byte[] responseData, Date creationTime) {
-        try (Connection conn = DriverManager.getConnection(DB_URL, USER, PASSWORD)) {
-            String sql = "INSERT INTO cached_responses (url, response_data, creation_time) VALUES (?, ?, ?)";
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, url);
-                pstmt.setBytes(2, responseData);
-                pstmt.setTimestamp(3, new Timestamp(creationTime.getTime()));
-                pstmt.executeUpdate();
-            }
-        } catch (SQLException e) {
-            e.printStackTrace(); // Handle database exception properly
-        }
-    }
-
 }
