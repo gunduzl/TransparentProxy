@@ -1,6 +1,7 @@
 package com.example.demo;
 
 import javafx.application.Platform;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
@@ -19,12 +20,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentMap;
 
 public class HomepageScreen {
-
     private final Scene scene;
     private final Stage primaryStage;
     private FilteredListManager filteredListManager;
@@ -35,81 +34,93 @@ public class HomepageScreen {
     private ConcurrentMap<String, CachedResources> cache;
     private final Customer currentCustomer;
 
-
-
     public HomepageScreen(Stage primaryStage, FilteredListManager filteredListManager, ConcurrentMap<String, CachedResources> cache, Customer currentCustomer) {
         this.primaryStage = primaryStage;
         this.filteredListManager = filteredListManager;
         this.cache = cache;
         this.currentCustomer = currentCustomer;
-        logTextArea = new TextArea();
+        this.logTextArea = new TextArea();
+
+        configureTextArea();
+        VBox homepageLayout = configureLayout();
+        this.scene = new Scene(new BorderPane(homepageLayout, new MenuBar(createFileMenu(), createHelpMenu()), null, null, null), 400, 300);
+        this.scene.getStylesheets().add(getClass().getResource("styles.css").toExternalForm());
+    }
+
+    private void configureTextArea() {
         logTextArea.setEditable(false);
         logTextArea.setWrapText(true);
+        VBox.setVgrow(logTextArea, Priority.ALWAYS);  // Make TextArea grow vertically
+    }
 
-
+    private VBox configureLayout() {
         Label statusLabel = new Label("Proxy Status: Stopped");
         Button startButton = new Button("Start Proxy");
         Button stopButton = new Button("Stop Proxy");
+        startButton.setOnAction(e -> startProxy(statusLabel));
+        stopButton.setOnAction(e -> stopProxy(statusLabel));
 
-        VBox homepageLayout = new VBox(10);
-        homepageLayout.setAlignment(Pos.CENTER);
-        homepageLayout.getChildren().addAll(statusLabel, startButton, stopButton,logTextArea);
-
-        BorderPane mainLayout = new BorderPane();
-        Menu fileMenu = createFileMenu();
-        Menu helpMenu = createHelpMenu();
-        mainLayout.setTop(new MenuBar(fileMenu, helpMenu));
-        mainLayout.setCenter(homepageLayout);
-
-        this.scene = new Scene(mainLayout, 400, 300);
-        this.scene.getStylesheets().add(getClass().getResource("styles.css").toExternalForm());
-
-        startButton.setOnAction(e -> startProxy());
-        stopButton.setOnAction(e -> stopProxy());
+        VBox layout = new VBox(10, statusLabel, startButton, stopButton, logTextArea);
+        layout.setAlignment(Pos.CENTER);
+        layout.setPadding(new Insets(10));
+        return layout;
     }
 
-    public void show() {
-        primaryStage.setScene(scene);
-    }
-
-    private void startProxy() {
+    private void startProxy(Label statusLabel) {
         int port = 8080; // Default port number
         try {
             serverSocket = new ServerSocket(port);
-            updateStatus("Proxy Status: Starting...");
+            isRunning = true;
+            updateStatus(statusLabel, "Proxy Status: Starting...");
 
             proxyThread = new Thread(() -> {
                 try {
-                    isRunning = true;
                     while (isRunning && !Thread.currentThread().isInterrupted()) {
-                        try {
-                            Socket incoming = serverSocket.accept();
-                            new ServerHandler(incoming,filteredListManager,logTextArea, cache, currentCustomer).start();
-                        } catch (IOException e) {
-                            if (isRunning) { // Only log unexpected errors.
-                                logError("Error accepting connection: " + e.getMessage());
-                            }
-                        }
+                        Socket incoming = serverSocket.accept();
+                        new ServerHandler(incoming, filteredListManager, logTextArea, cache, currentCustomer).start();
+                    }
+                } catch (IOException e) {
+                    if (isRunning) { // Only log unexpected errors.
+                        logError("Error accepting connection: " + e.getMessage());
                     }
                 } finally {
-                    updateStatus("Proxy Status: Stopped");
+                    updateStatus(statusLabel, "Proxy Status: Stopped");
                     appendToLog("Proxy server stopped");
                 }
             });
             proxyThread.start();
-            updateStatus("Proxy Status: Running on port " + port);
+            updateStatus(statusLabel, "Proxy Status: Running on port " + port);
             appendToLog("Proxy server started on port " + port);
         } catch (IOException e) {
             logError("Error starting proxy server: " + e.getMessage());
-            updateStatus("Proxy Status: Failed to start");
+            updateStatus(statusLabel, "Proxy Status: Failed to start");
         }
     }
 
-    private void updateStatus(String message) {
-        Platform.runLater(() -> {
-            Label statusLabel = (Label)((VBox)((BorderPane)scene.getRoot()).getCenter()).getChildren().get(0);
-            statusLabel.setText(message);
-        });
+    private void stopProxy(Label statusLabel) {
+        if (!isRunning) {
+            updateStatus(statusLabel, "Proxy Status: Already Stopped");
+            return;
+        }
+
+        try {
+            isRunning = false; // Signal the thread to stop
+            if (!serverSocket.isClosed()) {
+                serverSocket.close();
+            }
+            if (proxyThread != null && proxyThread.isAlive()) {
+                proxyThread.interrupt();
+                proxyThread.join(3000); // Wait for the thread to finish
+            }
+            updateStatus(statusLabel, "Proxy Status: Stopped");
+        } catch (IOException | InterruptedException e) {
+            logError("Error occurred while closing the proxy: " + e.getMessage());
+            updateStatus(statusLabel, "Proxy Status: Error stopping");
+        }
+    }
+
+    private void updateStatus(Label statusLabel, String message) {
+        Platform.runLater(() -> statusLabel.setText(message));
     }
 
     private void logError(String error) {
@@ -117,27 +128,6 @@ public class HomepageScreen {
     }
 
 
-    private void stopProxy() {
-        if (!isRunning) {
-            updateStatus("Proxy Status: Already Stopped");
-            return;
-        }
-
-        try {
-            isRunning = false; // Signal the thread to stop accepting new connections
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close(); // This will cause serverSocket.accept() to throw a SocketException
-            }
-            if (proxyThread != null && proxyThread.isAlive()) {
-                proxyThread.interrupt(); // Ensure any blocking operations are interrupted
-                proxyThread.join(3000); // Wait for the thread to finish with a timeout
-            }
-            updateStatus("Proxy Status: Stopped");
-        } catch (IOException | InterruptedException e) {
-            logError("Error occurred while closing the proxy: " + e.getMessage());
-            updateStatus("Proxy Status: Error stopping");
-        }
-    }
 
 
 
@@ -145,10 +135,10 @@ public class HomepageScreen {
         Menu fileMenu = new Menu("File");
 
         MenuItem startItem = new MenuItem("Start Proxy");
-        startItem.setOnAction(e -> startProxy());
+        startItem.setOnAction(e -> startProxy((Label) ((VBox) ((BorderPane) scene.getRoot()).getCenter()).getChildren().get(0)));
 
         MenuItem stopItem = new MenuItem("Stop Proxy");
-        stopItem.setOnAction(e -> stopProxy());
+        stopItem.setOnAction(e -> stopProxy((Label) ((VBox) ((BorderPane) scene.getRoot()).getCenter()).getChildren().get(0)));
 
         MenuItem reportItem = new MenuItem("Report");
         reportItem.setOnAction(e -> displayReport(currentCustomer.getUsername()));
@@ -313,7 +303,9 @@ public class HomepageScreen {
         Platform.runLater(() -> logTextArea.appendText(message + "\n"));
     }
 
-    public Scene getScene() {
-        return scene;
+    public void show() {
+        primaryStage.setScene(scene);
+        primaryStage.show();
     }
+
 }
