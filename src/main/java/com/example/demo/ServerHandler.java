@@ -98,10 +98,11 @@ public class ServerHandler extends Thread {
                 switch (method.toUpperCase()) {
                     case "GET":
                     case "HEAD":
-                        handleGetHeadRequest(method, domain, urlPath, restHeader);
+                        handleGetHeadRequest(ClientStream,method, domain, urlPath);
                         break;
                     case "POST":
-                        handlePostRequest(domain, urlPath, restHeader);
+                        BufferedReader ClientBuffer =new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                        handlePostRequest(ClientBuffer, ClientStream, url);
                         break;
                     case "OPTIONS":
                         handleOptionsRequest(domain, urlPath, restHeader);
@@ -240,42 +241,71 @@ public class ServerHandler extends Thread {
     }
 
 
-    private void handlePostRequest(String domain, String path, String restHeader) {
-        try {
-            URL url = new URL("http://" + domain + path);
-            String contentType = getHeaderValue("Content-Type", restHeader);
-            String contentLengthValue = getHeaderValue("Content-Length", restHeader);
-
-            if (contentLengthValue == null) {
-                appendToLog("POST request failed for domain: " + domain + "; Content-Length header is missing.");
-                return; // Properly handle this case, potentially sending a 411 Length Required response
+    private void handlePostRequest(BufferedReader clientInput, OutputStream clientOutput, URL url) throws IOException {
+        List<String> headers = new ArrayList<>();
+        StringBuilder bodyBuilder = new StringBuilder();
+        String contentLength = "0";
+        String line;
+        while (!(line = clientInput.readLine()).isEmpty()) {
+            headers.add(line);
+            if (line.startsWith("Content-Length:")) {
+                contentLength = line.split(":")[1].trim();
             }
+        }
 
-            int contentLength = Integer.parseInt(contentLengthValue);
-            if (contentLength > MAX_POST_SIZE) {
-                appendToLog("POST request failed for domain: " + domain + "; Content-Length exceeds limit.");
-                sendErrorResponse(ClientStream, 413, "Payload Too Large");
+        int length = Integer.parseInt(contentLength);
+        char[] body = new char[length];
+        clientInput.read(body, 0, length);
+        bodyBuilder.append(body);
+
+        String urlString = url.toString();
+
+        fetchAndCachePOST(clientOutput, url, "POST", urlString, headers, bodyBuilder.toString());
+    }
+
+
+    private void fetchAndCachePOST(OutputStream clientOutput,URL url, String method,String urlString, List<String> headers, String requestBody) throws IOException {
+        if (cache.containsKey(urlString)) {
+            CachedResources resource = cache.get(urlString);
+            if (!resource.isExpired()) {
+                byte[] data = resource.getData();
+                clientOutput.write(data);
+                clientOutput.flush();
+                appendToLog("Cached data sent for URL: " + urlString);
                 return;
+            } else {
+                appendToLog("Cached data expired for URL: " + urlString + ". Fetching from server...");
             }
+        } else {
+            appendToLog("No cached data found for URL: " + urlString + ". Fetching from server...");
+        }
 
-            byte[] requestBody = new byte[contentLength];
-            ServerStream.readFully(requestBody);  // Read the full POST body
+        ByteArrayOutputStream bufferStream = new ByteArrayOutputStream();
+        try (Socket socket = new Socket(url.getHost(), url.getDefaultPort());
+             InputStream serverInput = socket.getInputStream();
+             OutputStream serverOutput = socket.getOutputStream();
+             PrintWriter writer = new PrintWriter(serverOutput, true)) {
 
-            // Optionally, modify the requestBody here if needed
+            writer.println(method + " " + url.getFile() + " HTTP/1.1");
+            writer.println("Host: " + url.getHost());
+            writer.println("Connection: close");
+            headers.forEach(header -> writer.println(header));
+            writer.println(); // End of headers
+            writer.print(requestBody);
+            writer.flush();
 
-            byte[] response = fetchFromServer(url, "POST", contentType, requestBody);
-            if (response == null) {
-                sendErrorResponse(ClientStream, 502, "Bad Gateway");
-                return;
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = serverInput.read(buffer)) != -1) {
+                bufferStream.write(buffer, 0, bytesRead);
             }
+            byte[] data = bufferStream.toByteArray();
+            clientOutput.write(data);
+            clientOutput.flush();
 
-            sendToClient(url, response);
-            appendToLog("POST request handled for domain: " + domain);
-        } catch (NumberFormatException e) {
-            appendToLog("POST request failed for domain: " + domain + " due to invalid Content-Length value.");
-        } catch (IOException e) {
-            appendToLog("POST request failed for domain: " + domain + " with error: " + e.getMessage());
-            sendErrorResponse(ClientStream, 500, "Internal Server Error");
+            // Cache the fresh response
+            cache.put(urlString, new CachedResources(url, data, System.currentTimeMillis()));
+            appendToLog("FOR THE POST METHOD: New data fetched and cached for URL: " + urlString);
         }
     }
 
@@ -312,106 +342,58 @@ public class ServerHandler extends Thread {
     }
 
 
-    private void handleGetHeadRequest(String method, String domain, String path, String restHeader)  {
-        URL url = null;
-        try {
-            url = new URL("http://" + domain + path);
-        } catch (MalformedURLException e) {
-            appendToLog("GET/HEAD request failed for domain: " + domain + "; Invalid URL: " + e.getMessage());
-        }
+    private void handleGetHeadRequest(DataOutputStream clientStream, String method, String domain, String path) throws IOException {
+        URL url = new URL("http://" + domain + path);
         String urlString = url.toString();
-        String ifModifiedSince = null;
 
-        // Check cache first
-        appendToLog("************************************");
-        appendToLog("\nChecking cache for URL: " + urlString);
-        if (cache.containsKey(urlString)) {
-            CachedResources cachedResource = cache.get(urlString);
-            if (!cachedResource.isExpired()) {
-                SimpleDateFormat formatter = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
-                ifModifiedSince = formatter.format(new Date(cachedResource.getLastModifiedTimestamp()));
+        appendToLog("Checking cache for URL: " + urlString);
+        CachedResources cachedResource = cache.get(urlString);
+        if (cachedResource != null && !cachedResource.isExpired()) {
+            appendToLog("--------------CACHED DATA IS SEND TO CLIENT------------");
+            appendToLog("Serving cached data for URL: " + urlString);
+            appendToLog("-------------------------------------------------------");
+            clientStream.write(cachedResource.getData());
+            clientStream.flush();
+        } else {
+            if (cachedResource != null) {
+                appendToLog("Cached data is expired for URL: " + urlString);
+            } else {
+                appendToLog("No cached data found for URL: " + urlString);
             }
+            fetchAndCacheGET_HEAD(url, method, clientStream, urlString);
         }
-
-        byte[] data = null;
-        try {
-            data = fetchFromServerWithConditionalGet(url, method, restHeader, ifModifiedSince);
-        } catch (IOException e) {
-            appendToLog("GET/HEAD request failed for domain: " + domain + "; Error: " + e.getMessage());
-        }
-
-        // Handle non-modified status (304 Not Modified)
-        if (data == null && ifModifiedSince != null) {
-            data = cache.get(urlString).getData(); // Use cached data
-            logCachedDataSent(urlString, connection.getInetAddress().getHostAddress());
-            appendToLog("------------------------------------");
-            appendToLog("\nQuery was made to the server and server responded with 304 Not Modified. Cached data sent to client");
-            appendToLog("Cached data sent for URL: " + urlString + " to client IP: " + connection.getInetAddress().getHostAddress());
-
-        } else if (data != null) {
-            long lastModified = parseLastModified(restHeader); // Extract last-modified date from response headers
-            cache.put(urlString, new CachedResources(data, lastModified));  // Update the cache
-        }
-
-        try {
-            sendToClient(url, data);
-        } catch (IOException e) {
-            appendToLog("Failed to send GET/HEAD response to client: " + e.getMessage());
-        }
-        appendToLog("GET/HEAD request handled for domain: " + domain);
     }
 
-
-    private byte[] fetchFromServerWithConditionalGet(URL url, String method, String headers, String ifModifiedSince) throws IOException {
+    private void fetchAndCacheGET_HEAD(URL url, String method, OutputStream clientOutput, String urlString) throws IOException {
+        ByteArrayOutputStream bufferStream = new ByteArrayOutputStream();
         try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
-             InputStream serverInputStream = socket.getInputStream();
-             OutputStream serverOutputStream = socket.getOutputStream();
-             ByteArrayOutputStream responseStream = new ByteArrayOutputStream();
-             PrintWriter writer = new PrintWriter(serverOutputStream, true)) {
+             InputStream serverInput = socket.getInputStream();
+             OutputStream serverOutput = socket.getOutputStream();
+             PrintWriter writer = new PrintWriter(serverOutput, true)) {
 
-            StringBuilder requestBuilder = new StringBuilder();
-            requestBuilder.append(method).append(" ").append(url.getFile()).append(" HTTP/1.1\r\n")
-                    .append("Host: ").append(url.getHost()).append("\r\n");
-            if (ifModifiedSince != null) {
-                requestBuilder.append("If-Modified-Since: ").append(ifModifiedSince).append("\r\n");
-            }
-            requestBuilder.append("Connection: close\r\n\r\n");
-
-            writer.print(requestBuilder.toString());
+            // Request the resource
+            writer.println(method + " " + url.getFile() + " HTTP/1.1");
+            writer.println("Host: " + url.getHost());
+            writer.println("Connection: close");
+            writer.println();
             writer.flush();
 
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
-            while ((bytesRead = serverInputStream.read(buffer)) != -1) {
-                responseStream.write(buffer, 0, bytesRead);
+            while ((bytesRead = serverInput.read(buffer)) != -1) {
+                bufferStream.write(buffer, 0, bytesRead);
             }
 
-            // Check if the server responded with "304 Not Modified"
-            String responseHeader = responseStream.toString(StandardCharsets.UTF_8);
-            if (responseHeader.contains("304 Not Modified")) {
-                appendToLog("Server responded with 304 Not Modified for URL: " + url);
-                return null;  // No need to update the cache
-            }
+            byte[] data = bufferStream.toByteArray();
+            clientOutput.write(data);
+            clientOutput.flush();
 
-            return responseStream.toByteArray();
+            // Cache the fetched data with a new expiry time
+            long expiryTime = System.currentTimeMillis() + 1000 * 60 * 10; // 10 minutes from now
+            CachedResources newCachedResource = new CachedResources(url,data, expiryTime);
+            cache.put(urlString, newCachedResource);
+            appendToLog("New data fetched and cached with expiry for URL: " + urlString);
         }
-    }
-
-
-    private long parseLastModified(String headers) {
-        String[] lines = headers.split("\r\n");
-        SimpleDateFormat formatter = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
-        for (String line : lines) {
-            if (line.startsWith("Last-Modified:")) {
-                String dateString = line.substring(15).trim();
-                try {
-                    return formatter.parse(dateString).getTime();
-                } catch (ParseException e) {
-                    appendToLog("Failed to parse Last-Modified header: " + e.getMessage());
-                }
-            }
-        }
-        return System.currentTimeMillis();  // Default to current time if header not found or parsing fails
     }
 
 

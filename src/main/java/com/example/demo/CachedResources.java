@@ -2,27 +2,33 @@ package com.example.demo;
 
 import java.net.URL;
 public class CachedResources {
+    private URL url;
     private byte[] data;
-    private long lastModifiedTimestamp;
-    private long timestamp;
+    private long expiryTime;  // Milliseconds since the epoch when the data should expire
 
-    public CachedResources(byte[] data, long lastModifiedTimestamp) {
+
+    public CachedResources(URL url,byte[] data, long expiryTime) {
+        this.url = url;
         this.data = data;
-        this.lastModifiedTimestamp = lastModifiedTimestamp;
-        this.timestamp = System.currentTimeMillis();
+        this.expiryTime = expiryTime;
     }
 
     public byte[] getData() {
         return data;
     }
 
-    public long getLastModifiedTimestamp() {
-        return lastModifiedTimestamp;
+    public URL getUrl() {
+        return url;
     }
 
+
     public boolean isExpired() {
-        long duration = System.currentTimeMillis() - timestamp;
-        return duration > 300000; // 5 minutes expiration
+        long currentTime = System.currentTimeMillis();
+        boolean expired = currentTime > expiryTime;
+        if (expired) {
+            System.out.println("Current time: " + currentTime + " is greater than expiry time: " + expiryTime);
+        }
+        return expired;
     }
 }
 
