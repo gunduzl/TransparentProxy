@@ -24,11 +24,7 @@ public class CachedResources {
 
     public boolean isExpired() {
         long currentTime = System.currentTimeMillis();
-        boolean expired = currentTime > expiryTime;
-        if (expired) {
-            System.out.println("Current time: " + currentTime + " is greater than expiry time: " + expiryTime);
-        }
-        return expired;
+        return currentTime > expiryTime; // If the current time is greater than the expiry time, the data is expired
     }
 }
 
