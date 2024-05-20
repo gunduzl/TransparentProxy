@@ -258,6 +258,7 @@ public class ServerHandler extends Thread {
         }
     }
 
+    // Modified handlePostRequest method
     private void handlePostRequest(URL url, String headers) throws IOException {
         final int BUFFER_SIZE = 4096;
         try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
@@ -265,15 +266,23 @@ public class ServerHandler extends Thread {
              OutputStream serverOutputStream = socket.getOutputStream();
              ByteArrayOutputStream responseStream = new ByteArrayOutputStream();
              PrintWriter writer = new PrintWriter(serverOutputStream, true)) {
-            String  method = "POST";
 
             // Process and set headers using the utility function
-            String processedHeaders = HeaderUtils.processHeaders(headers, url, method);
+            String processedHeaders = HeaderUtils.processHeaders(headers, url, "POST");
             writer.print(processedHeaders);
             writer.println(); // Ensure an empty line to end the header section
             writer.flush();
 
+            // Read the body from the client and forward it to the server
+            StringBuilder requestBody = new StringBuilder();
+            while (clientInput.ready()) {
+                requestBody.append((char) clientInput.read());
+            }
+            String body = requestBody.toString();
+            writer.print(body);
+            writer.flush();
 
+            // Read the response from the server and forward it to the client
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
             while ((bytesRead = serverInputStream.read(buffer)) != -1) {
@@ -283,6 +292,7 @@ public class ServerHandler extends Thread {
             clientOutput.write(responseStream.toByteArray());
         }
     }
+
 
     private void handleOptionsRequest(String domain, String path, String restHeader) {
         try {
