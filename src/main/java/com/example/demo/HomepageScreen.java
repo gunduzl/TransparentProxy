@@ -27,9 +27,11 @@ public class HomepageScreen {
     private final Scene scene;
     private final Stage primaryStage;
     private FilteredListManager filteredListManager;
-    private ServerSocket serverSocket;
+    private ServerSocket httpServerSocket;
+    private ServerSocket httpsServerSocket;
     private volatile boolean isRunning = false;
-    private Thread proxyThread;
+    private Thread httpProxyThread;
+    private Thread httpsProxyThread;
     private final TextArea logTextArea;
     private ConcurrentMap<String, CachedResources> cache;
     private final Customer currentCustomer;
@@ -67,30 +69,50 @@ public class HomepageScreen {
     }
 
     private void startProxy(Label statusLabel) {
-        int port = 8080; // Default port number
         try {
-            serverSocket = new ServerSocket(port);
+            httpServerSocket = new ServerSocket(80);
+            httpsServerSocket = new ServerSocket(443);
             isRunning = true;
             updateStatus(statusLabel, "Proxy Status: Starting...");
 
-            proxyThread = new Thread(() -> {
+            // HTTP Proxy Thread
+            httpProxyThread = new Thread(() -> {
                 try {
                     while (isRunning && !Thread.currentThread().isInterrupted()) {
-                        Socket incoming = serverSocket.accept();
+                        Socket incoming = httpServerSocket.accept();
                         new ServerHandler(incoming, filteredListManager, logTextArea, cache, currentCustomer).start();
                     }
                 } catch (IOException e) {
                     if (isRunning) { // Only log unexpected errors.
-                        logError("Error accepting connection: " + e.getMessage());
+                        logError("Error accepting connection on HTTP port: " + e.getMessage());
                     }
                 } finally {
                     updateStatus(statusLabel, "Proxy Status: Stopped");
-                    appendToLog("Proxy server stopped");
+                    appendToLog("HTTP Proxy server stopped");
                 }
             });
-            proxyThread.start();
-            updateStatus(statusLabel, "Proxy Status: Running on port " + port);
-            appendToLog("Proxy server started on port " + port);
+
+            // HTTPS Proxy Thread
+            httpsProxyThread = new Thread(() -> {
+                try {
+                    while (isRunning && !Thread.currentThread().isInterrupted()) {
+                        Socket incoming = httpsServerSocket.accept();
+                        new ServerHandler(incoming, filteredListManager, logTextArea, cache, currentCustomer, true).start();
+                    }
+                } catch (IOException e) {
+                    if (isRunning) { // Only log unexpected errors.
+                        logError("Error accepting connection on HTTPS port: " + e.getMessage());
+                    }
+                } finally {
+                    updateStatus(statusLabel, "Proxy Status: Stopped");
+                    appendToLog("HTTPS Proxy server stopped");
+                }
+            });
+
+            httpProxyThread.start();
+            httpsProxyThread.start();
+            updateStatus(statusLabel, "Proxy Status: Running on ports 80 (HTTP) and 443 (HTTPS)");
+            appendToLog("Proxy server started on ports 80 (HTTP) and 443 (HTTPS)");
         } catch (IOException e) {
             logError("Error starting proxy server: " + e.getMessage());
             updateStatus(statusLabel, "Proxy Status: Failed to start");
@@ -104,13 +126,20 @@ public class HomepageScreen {
         }
 
         try {
-            isRunning = false; // Signal the thread to stop
-            if (!serverSocket.isClosed()) {
-                serverSocket.close();
+            isRunning = false; // Signal the threads to stop
+            if (httpServerSocket != null && !httpServerSocket.isClosed()) {
+                httpServerSocket.close();
             }
-            if (proxyThread != null && proxyThread.isAlive()) {
-                proxyThread.interrupt();
-                proxyThread.join(3000); // Wait for the thread to finish
+            if (httpsServerSocket != null && !httpsServerSocket.isClosed()) {
+                httpsServerSocket.close();
+            }
+            if (httpProxyThread != null && httpProxyThread.isAlive()) {
+                httpProxyThread.interrupt();
+                httpProxyThread.join(3000); // Wait for the thread to finish
+            }
+            if (httpsProxyThread != null && httpsProxyThread.isAlive()) {
+                httpsProxyThread.interrupt();
+                httpsProxyThread.join(3000); // Wait for the thread to finish
             }
             updateStatus(statusLabel, "Proxy Status: Stopped");
         } catch (IOException | InterruptedException e) {
@@ -126,10 +155,6 @@ public class HomepageScreen {
     private void logError(String error) {
         System.out.println(error);  // Replace this with a more robust logging approach
     }
-
-
-
-
 
     private Menu createFileMenu() {
         Menu fileMenu = new Menu("File");
@@ -174,7 +199,6 @@ public class HomepageScreen {
             confirmation.showAndWait();
         });
     }
-
 
     private void removeHostFromFilter() {
         TextInputDialog dialog = new TextInputDialog();
@@ -223,7 +247,6 @@ public class HomepageScreen {
         alert.setContentText(message.toString());
         alert.showAndWait();
     }
-
 
     private void displayReport(String customerUsername) {
         // Logic to fetch log entries from the database
@@ -282,9 +305,6 @@ public class HomepageScreen {
         }
     }
 
-
-
-
     private Menu createHelpMenu() {
         Menu helpMenu = new Menu("Help");
         MenuItem aboutItem = new MenuItem("About");
@@ -298,7 +318,6 @@ public class HomepageScreen {
         // This could involve showing a popup or navigating to a new scene
     }
 
-
     private void appendToLog(String message) {
         Platform.runLater(() -> logTextArea.appendText(message + "\n"));
     }
@@ -307,5 +326,4 @@ public class HomepageScreen {
         primaryStage.setScene(scene);
         primaryStage.show();
     }
-
 }
