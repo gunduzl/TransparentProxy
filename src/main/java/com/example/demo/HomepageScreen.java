@@ -5,12 +5,13 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.GridPane;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.VBox;
+import javafx.scene.layout.*;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -45,26 +46,40 @@ public class HomepageScreen {
 
         configureTextArea();
         VBox homepageLayout = configureLayout();
-        this.scene = new Scene(new BorderPane(homepageLayout, new MenuBar(createFileMenu(), createHelpMenu()), null, null, null), 400, 300);
+        BorderPane root = new BorderPane(homepageLayout, new MenuBar(createFileMenu(), createHelpMenu()), null, null, null);
+        root.setPadding(new Insets(20));
+        this.scene = new Scene(root, 600, 400);
         this.scene.getStylesheets().add(getClass().getResource("styles.css").toExternalForm());
     }
 
     private void configureTextArea() {
         logTextArea.setEditable(false);
         logTextArea.setWrapText(true);
+        logTextArea.setPrefHeight(200);
+        logTextArea.setStyle("-fx-font-family: 'Courier New'; -fx-font-size: 12;");
         VBox.setVgrow(logTextArea, Priority.ALWAYS);  // Make TextArea grow vertically
     }
 
     private VBox configureLayout() {
         Label statusLabel = new Label("Proxy Status: Stopped");
+        statusLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+
         Button startButton = new Button("Start Proxy");
+        startButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white;");
+
         Button stopButton = new Button("Stop Proxy");
+        stopButton.setStyle("-fx-background-color: #F44336; -fx-text-fill: white;");
+
         startButton.setOnAction(e -> startProxy(statusLabel));
         stopButton.setOnAction(e -> stopProxy(statusLabel));
 
-        VBox layout = new VBox(10, statusLabel, startButton, stopButton, logTextArea);
+        HBox buttonBox = new HBox(10, startButton, stopButton);
+        buttonBox.setAlignment(Pos.CENTER);
+
+        VBox layout = new VBox(20, statusLabel, buttonBox, logTextArea);
         layout.setAlignment(Pos.CENTER);
-        layout.setPadding(new Insets(10));
+        layout.setPadding(new Insets(20));
+        layout.setStyle("-fx-background-color: #f0f0f0; -fx-border-color: #ccc; -fx-border-width: 1; -fx-border-radius: 5;");
         return layout;
     }
 
@@ -80,7 +95,7 @@ public class HomepageScreen {
                 try {
                     while (isRunning && !Thread.currentThread().isInterrupted()) {
                         Socket incoming = httpServerSocket.accept();
-                        new ServerHandler(incoming, filteredListManager, logTextArea, cache, currentCustomer).start();
+                        new ServerHandler(incoming, filteredListManager, logTextArea, cache, currentCustomer,false).start();
                     }
                 } catch (IOException e) {
                     if (isRunning) { // Only log unexpected errors.
@@ -166,7 +181,7 @@ public class HomepageScreen {
         stopItem.setOnAction(e -> stopProxy((Label) ((VBox) ((BorderPane) scene.getRoot()).getCenter()).getChildren().get(0)));
 
         MenuItem reportItem = new MenuItem("Report");
-        reportItem.setOnAction(e -> displayReport(currentCustomer.getUsername()));
+        reportItem.setOnAction(e -> promptForIpAddress());
 
         MenuItem addHostItem = new MenuItem("Add Host to Filter");
         addHostItem.setOnAction(e -> addHostToFilter());
@@ -180,8 +195,16 @@ public class HomepageScreen {
         MenuItem exitItem = new MenuItem("Exit");
         exitItem.setOnAction(e -> primaryStage.close());
 
-        fileMenu.getItems().addAll(startItem, stopItem, reportItem, addHostItem, displayFilterItem, removeHostItem , new SeparatorMenuItem(), exitItem);
+        fileMenu.getItems().addAll(startItem, stopItem, reportItem, addHostItem, displayFilterItem, removeHostItem, new SeparatorMenuItem(), exitItem);
         return fileMenu;
+    }
+
+    private void promptForIpAddress() {
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Enter IP Address");
+        dialog.setHeaderText("Enter the IP address:");
+        Optional<String> result = dialog.showAndWait();
+        result.ifPresent(this::displayReport);
     }
 
     private void addHostToFilter() {
@@ -248,15 +271,15 @@ public class HomepageScreen {
         alert.showAndWait();
     }
 
-    private void displayReport(String customerUsername) {
+    private void displayReport(String ipAddress) {
         // Logic to fetch log entries from the database
         try (Connection connection = DatabaseConnection.getConnection()) {
             String sql = "SELECT r.date, r.client_ip, r.domain, r.resource_path, r.method, r.status_code " +
                     "FROM request_logs r " +
                     "JOIN Customer c ON r.customer_id = c.id " +
-                    "WHERE c.username = ?";
+                    "WHERE r.client_ip = ?";
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                statement.setString(1, customerUsername);
+                statement.setString(1, ipAddress);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     StringBuilder reportBuilder = new StringBuilder();
                     while (resultSet.next()) {
@@ -289,11 +312,21 @@ public class HomepageScreen {
                     expContent.setMaxWidth(Double.MAX_VALUE);
                     expContent.add(textArea, 0, 0);
 
+                    // Add export button
+                    Button exportButton = new Button("Export as TXT");
+                    exportButton.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white;");
+                    exportButton.setOnAction(e -> exportReportAsTxt(reportBuilder.toString()));
+
+                    VBox vbox = new VBox(expContent, exportButton);
+                    vbox.setSpacing(10);
+                    vbox.setPadding(new Insets(20));
+                    vbox.setStyle("-fx-background-color: #fff; -fx-border-color: #ccc; -fx-border-width: 1; -fx-border-radius: 5;");
+
                     // Show the report in a popup dialog with a scrollable area
                     Alert reportAlert = new Alert(Alert.AlertType.INFORMATION);
                     reportAlert.setTitle("Request Log Report");
-                    reportAlert.setHeaderText("Log Report for " + customerUsername);
-                    reportAlert.getDialogPane().setContent(expContent);
+                    reportAlert.setHeaderText("Log Report for IP: " + ipAddress);
+                    reportAlert.getDialogPane().setContent(vbox);
                     reportAlert.showAndWait();
                 }
             } catch (SQLException e) {
@@ -302,6 +335,30 @@ public class HomepageScreen {
         } catch (SQLException e) {
             logError("Error fetching log entries from the database: " + e.getMessage());
             // Handle the exception (e.g., show an error message to the user)
+        }
+    }
+
+    private void exportReportAsTxt(String reportContent) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Save Report");
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Text Files", "*.txt"));
+        File file = fileChooser.showSaveDialog(primaryStage);
+        if (file != null) {
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
+                writer.write(reportContent);
+                Alert confirmation = new Alert(Alert.AlertType.INFORMATION);
+                confirmation.setTitle("Export Successful");
+                confirmation.setHeaderText(null);
+                confirmation.setContentText("Report successfully exported to " + file.getAbsolutePath());
+                confirmation.showAndWait();
+            } catch (IOException e) {
+                logError("Error exporting report: " + e.getMessage());
+                Alert error = new Alert(Alert.AlertType.ERROR);
+                error.setTitle("Export Failed");
+                error.setHeaderText(null);
+                error.setContentText("Failed to export the report. Please try again.");
+                error.showAndWait();
+            }
         }
     }
 
