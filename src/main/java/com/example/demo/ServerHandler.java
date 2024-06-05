@@ -319,19 +319,20 @@ public class ServerHandler extends Thread {
             clientOutput.write(cachedResource.getData());
             clientOutput.flush();
         } else {
-            fetchAndCacheGET_HEAD(url, method, urlString, header); // Fetch and cache the GET/HEAD request
+            GET_HEAD_FROM_SERVER(url, method, urlString, header); // Fetch and cache the GET/HEAD request
         }
     }
 
-    private void fetchAndCacheGET_HEAD(URL url, String method, String urlString, String headers) throws IOException {
+    private void GET_HEAD_FROM_SERVER(URL url, String method, String urlString, String headers) throws IOException {
         ByteArrayOutputStream bufferStream = new ByteArrayOutputStream();
-        try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
+        try (Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort()); // Connect to the server using the URL host and port number
              InputStream serverInput = socket.getInputStream();
              OutputStream serverOutput = socket.getOutputStream();
              PrintWriter writer = new PrintWriter(serverOutput, true)) {
 
             // Process and set headers using the utility function
             String processedHeaders = HeaderUtils.processHeaders(headers, url, method);
+            // processedHeaders will contain the processed headers for the request = method + path + HTTP/1.1 + other headers
             writer.print(processedHeaders);
             writer.println(); // Ensure an empty line to end the header section
             writer.flush();
@@ -448,10 +449,10 @@ public class ServerHandler extends Thread {
         String clientIP = connection.getInetAddress().getHostAddress();
         StringBuilder requestBody = new StringBuilder();
 
-        while (!clientInput.readLine().isEmpty()) {
+        while (!clientInput.readLine().isEmpty()) { // Read headers until empty line is found
             // Read headers
         }
-        while (clientInput.ready()) { // Read request body from client
+        while (clientInput.ready()) { // Read request body from client input stream until no more data
             requestBody.append((char) clientInput.read());
         }
 
@@ -468,9 +469,9 @@ public class ServerHandler extends Thread {
     }
 
     private String extractTokenFromRequestBody(String requestBody) {
-        for (String param : requestBody.split("&")) {
+        for (String param : requestBody.split("&")) { // Split request body by "&" to extract parameters and values separately
             String[] pair = param.split("=");
-            if (pair.length == 2 && "token".equals(pair[0])) {
+            if (pair.length == 2 && "token".equals(pair[0])) { // Check if parameter is "token" and extract value
                 return pair[1]; // Extract token from request body
             }
         }
