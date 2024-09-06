@@ -1,7 +1,3 @@
-Here's a README file draft for your project:
-
----
-
 # Transparent Proxy
 
 
