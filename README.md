@@ -174,13 +174,15 @@ relayData(clientInputStream, serverOutputStream);
 relayData(serverInputStream, clientOutputStream);
 ```
 
----
+
 
 ## Conclusion
 
 This document details how a proxy server manages client requests, handles socket and stream management, and forwards requests to the destination server. The `HeaderUtils` class ensures headers are processed correctly, and caching optimizes resource delivery. Each request opens a new socket, ensuring efficient communication and proper request-response flow between the client and the server.
 
+------------------------------------
 
+## USAGE
 
 ## Features
 
