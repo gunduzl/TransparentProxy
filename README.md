@@ -12,6 +12,176 @@ This is achieved by modifying DNS records via a DNS server. For example, for the
 
 Transparent Proxy is a Java-based application that acts as an HTTP/HTTPS proxy server, providing features like content filtering, caching, and logging. Built with JavaFX for the user interface, the proxy server is capable of handling requests, maintaining a resource cache, and allowing users to manage filtered hosts. The system uses token-based authentication to decide whether content filtering is enabled or disabled for each user. The application connects to a PostgreSQL database for logging requests and managing customer data.
 
+
+
+# Client Request Handling by Proxy and Forwarding to Server
+
+This document explains how the proxy server processes client HTTP requests and forwards them to the target server step-by-step. It uses an example request for `google.com/images/monkey2.png` and discusses the role of the `HeaderUtils` class in processing headers.
+
+---
+
+## 1. Initial Client HTTP Request
+
+The client browser generates an HTTP GET request to access the resource `google.com/images/monkey2.png`:
+
+```
+GET /images/monkey2.png HTTP/1.1
+Host: google.com
+User-Agent: Mozilla/5.0
+Accept: image/png,image/*;q=0.8,*/*;q=0.5
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+```
+
+This request is sent to the proxy server.
+
+---
+
+## 2. Proxy Server Receives the Request
+
+Once the proxy server receives the client's request, the `ServerHandler` class manages the connection on a separate thread for each client request, ensuring concurrent processing.
+
+- **Socket Initialization**: A socket represents the connection between the client and proxy, and streams handle the data transmission:
+  - **Input Stream**: `BufferedReader clientInput = new BufferedReader(new InputStreamReader(connection.getInputStream()));`
+  - **Output Stream**: `DataOutputStream clientOutput = new DataOutputStream(connection.getOutputStream());`
+
+---
+
+## 3. Processing the Client Request
+
+### a. Reading the Request Line
+The `handleClientRequest()` method reads the first line of the HTTP request using `clientInput.readLine()`:
+
+```
+GET /images/monkey2.png HTTP/1.1
+```
+
+### b. Parsing HTTP Method and Path
+The HTTP method (`GET`) and the requested path (`/images/monkey2.png`) are extracted, and the remaining headers are read:
+
+```
+Host: google.com
+User-Agent: Mozilla/5.0
+Accept: image/png,image/*;q=0.8,*/*;q=0.5
+```
+
+### c. Extracting the Host Header
+The proxy uses `extractHost()` to retrieve the destination host (`google.com`).
+
+---
+
+## 4. Forwarding the Request to the Target Server
+
+### a. Cache Check
+The proxy checks if the resource is cached. If not, the request is forwarded to the target server.
+
+### b. URL Construction
+The proxy constructs the full URL for the request and opens a new socket to connect to the server:
+
+```java
+Socket socket = new Socket(url.getHost(), url.getPort() == -1 ? 80 : url.getPort());
+```
+
+In this case, the socket connects to `google.com` on port 80.
+
+---
+
+## 5. Header Handling with `HeaderUtils`
+
+The proxy prepares the request headers to be sent to the server using `HeaderUtils.processHeaders()`, ensuring there are no duplicates and formatting the request appropriately.
+
+- **Request Line**:
+
+  ```
+  GET /images/monkey2.png HTTP/1.1\r\n
+  ```
+
+- **Host Header**:
+
+  ```
+  Host: google.com\r\n
+  ```
+
+- **Connection Header**:
+
+  ```
+  Connection: close\r\n
+  ```
+
+The processed headers are then sent to the server:
+
+```java
+writer.print(processedHeaders);
+writer.println();
+writer.flush();
+```
+
+---
+
+## 6. Receiving the Server Response
+
+The proxy reads the server's response using an `InputStream` and stores the data in a buffer:
+
+```java
+byte[] buffer = new byte[BUFFER_SIZE];
+int bytesRead;
+while ((bytesRead = serverInput.read(buffer)) != -1) {
+    bufferStream.write(buffer, 0, bytesRead);
+}
+```
+
+---
+
+## 7. Sending the Response Back to the Client
+
+The proxy forwards the server's response back to the client:
+
+```java
+byte[] data = bufferStream.toByteArray();
+clientOutput.write(data);
+clientOutput.flush();
+```
+
+---
+
+## 8. Socket and Stream Management
+
+The proxy opens a new socket for each client-server interaction and closes the socket after the request is processed:
+
+```java
+if (socket != null && !socket.isClosed()) {
+    socket.close();
+}
+```
+
+Streams are also closed after the data transmission:
+
+```java
+clientInput.close();
+clientOutput.close();
+```
+
+---
+
+## 9. Handling HTTPS Requests
+
+For HTTPS requests, the proxy processes `CONNECT` methods and establishes a tunnel between the client and the destination server to relay data:
+
+```java
+Socket targetSocket = new Socket(host, port);
+relayData(clientInputStream, serverOutputStream);
+relayData(serverInputStream, clientOutputStream);
+```
+
+---
+
+## Conclusion
+
+This document details how a proxy server manages client requests, handles socket and stream management, and forwards requests to the destination server. The `HeaderUtils` class ensures headers are processed correctly, and caching optimizes resource delivery. Each request opens a new socket, ensuring efficient communication and proper request-response flow between the client and the server.
+
+
+
 ## Features
 
 - **HTTP/HTTPS Proxy**: Handles incoming HTTP and HTTPS requests, forwarding them to the destination and managing responses.
